@@ -160,7 +160,9 @@ export class MealService {
       isMidnight,
     }));
 
-    const capacity = canteen?.capacity || 9999;
+    // 食堂存在则取真实产能：产能 0 表示停餐/零供给，绝不能回退成"无限产能"
+    const capacity = canteen ? Math.max(0, Math.floor(Number(canteen.capacity) || 0)) : 9999;
+    const zeroSupply = capacity === 0;
     const result = allocate(demandRows, capacity);
 
     // 落库：分配量 + 需求分解（可追溯）
@@ -168,7 +170,7 @@ export class MealService {
       const o = orders[idx];
       const r = result.rows[idx];
       o.generatedCount = r.allocated;
-      o.status = result.capacityAdjusted ? 'adjusted' : 'generated';
+      o.status = zeroSupply ? 'cancelled' : result.capacityAdjusted ? 'adjusted' : 'generated';
       o.demandDetail = JSON.stringify({
         present: r.present, dorm: r.dorm, plan: r.plan, declared: r.declared,
         overtime: r.overtime, nightSnack: r.nightSnack, ethnic: r.ethnic,
@@ -181,7 +183,8 @@ export class MealService {
 
     const ethnicTotal = result.rows.reduce((a, r) => a + Math.min(r.ethnic, r.want), 0);
     const ethnicAllocated = result.rows.reduce((a, r) => a + r.ethnicAllocated, 0);
-    session.status = 'confirmed';
+    // 零供给：餐次置为停餐（stopped），取餐端将拒绝取餐；否则正常确认
+    session.status = zeroSupply ? 'stopped' : 'confirmed';
     await this.sessions.save(session);
 
     return {
@@ -189,6 +192,7 @@ export class MealService {
       capacity: result.capacity,
       generated: result.allocated,
       capacityAdjusted: result.capacityAdjusted,
+      zeroSupply,
       ethnicTotal,
       ethnicAllocated,
       // 可追溯的逐班组分解

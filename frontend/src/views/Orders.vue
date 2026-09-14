@@ -94,7 +94,9 @@
 
         <el-card class="soft-card" v-if="genResult">
           <div class="section-title"><el-icon><MagicStick /></el-icon>需求合成与产能分配（可追溯）</div>
-          <el-alert :type="genResult.capacityAdjusted ? 'warning' : 'success'" :closable="false" style="margin-bottom:10px">
+          <el-alert v-if="genResult.zeroSupply" type="error" :closable="false" style="margin-bottom:10px"
+            title="食堂当前产能为 0（停餐/零供给）：本餐次已置为「停工取消」，各班组分配与总生成量均为 0，取餐端将拒绝取餐。恢复供餐请提高食堂产能后重新生成。" />
+          <el-alert v-else :type="genResult.capacityAdjusted ? 'warning' : 'success'" :closable="false" style="margin-bottom:10px">
             <template #title>
               合成需求 {{ genResult.totalWant }} 份，食堂产能 {{ genResult.capacity }} 份，
               <b>实际分配 {{ genResult.generated }} 份</b>；
