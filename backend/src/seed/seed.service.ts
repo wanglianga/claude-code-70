@@ -6,6 +6,7 @@ import { User } from '../entities/user.entity';
 import { Team } from '../entities/team.entity';
 import { Worker } from '../entities/worker.entity';
 import { Attendance } from '../entities/attendance.entity';
+import { ConstructionPlan } from '../entities/construction-plan.entity';
 import { Canteen } from '../entities/canteen.entity';
 import { Supplier } from '../entities/supplier.entity';
 import { MealSession } from '../entities/meal-session.entity';
@@ -15,6 +16,7 @@ import { FoodSample } from '../entities/food-sample.entity';
 import { MealDelivery } from '../entities/meal-delivery.entity';
 import { MealPickup } from '../entities/meal-pickup.entity';
 import { Incident } from '../entities/incident.entity';
+import { allocate, synthesizeOne } from '../modules/allocation';
 
 @Injectable()
 export class SeedService implements OnModuleInit {
@@ -24,6 +26,7 @@ export class SeedService implements OnModuleInit {
     @InjectRepository(Team) private teams: Repository<Team>,
     @InjectRepository(Worker) private workers: Repository<Worker>,
     @InjectRepository(Attendance) private attendance: Repository<Attendance>,
+    @InjectRepository(ConstructionPlan) private plans: Repository<ConstructionPlan>,
     @InjectRepository(Canteen) private canteens: Repository<Canteen>,
     @InjectRepository(Supplier) private suppliers: Repository<Supplier>,
     @InjectRepository(MealSession) private sessions: Repository<MealSession>,
@@ -147,19 +150,54 @@ export class SeedService implements OnModuleInit {
       }));
     }
 
-    // 模拟生成（按考勤 + 产能 260 足够）
+    // ---- 施工计划：项目部排班（白班/夜班各班组计划上岗人数 + 作业区） ----
+    const planDefs: Array<[string, number, number, string, boolean]> = [
+      // shift, teamIdx, plannedWorkers, area, nightWork
+      ['day', 0, 10, '3号楼主体', false],
+      ['day', 1, 9, '地下车库', false],
+      ['day', 2, 8, '塔吊作业区', false],
+      ['night', 0, 3, '夜间浇筑区', true],
+      ['night', 1, 3, '塔吊作业区', true],
+      ['night', 2, 2, '2#塔吊安全平台', true],
+    ];
+    for (const [shift, ti, plannedWorkers, area, nightWork] of planDefs) {
+      await this.plans.save(this.plans.create({
+        date: today, shift: shift as string, teamId: teamRows[ti].id,
+        plannedWorkers, workArea: area, nightWork,
+      }));
+    }
+
+    // 模拟生成：四来源（考勤/宿舍/计划/申报）合成 + 最大余数法产能分配（食堂产能 260，充足）
     const genFor = async (s: MealSession) => {
-      const os = await this.orders.find({ where: { sessionId: s.id } });
+      const os = await this.orders.find({ where: { sessionId: s.id }, relations: ['team'] });
       const shift = s.shift === 'midnight' ? 'night' : 'day';
       const atts = await this.attendance.find({ where: { date: today, shift, present: true }, relations: ['worker'] });
       const presentByTeam: Record<number, number> = {};
       atts.forEach((a) => { presentByTeam[a.worker.teamId] = (presentByTeam[a.worker.teamId] || 0) + 1; });
-      for (const o of os) {
-        const base = presentByTeam[o.teamId] ?? o.headcount;
-        let want = s.shift === 'midnight' ? Math.max(o.nightSnackCount, 0) + o.overtimeCount : base + o.overtimeCount;
-        want = Math.max(want, o.ethnicCount);
-        o.generatedCount = want;
-        o.status = 'generated';
+      const planRecs = await this.plans.find({ where: { date: today, shift } });
+      const planByTeam: Record<number, number> = {};
+      planRecs.forEach((p) => { planByTeam[p.teamId] = p.plannedWorkers; });
+
+      const demandRows = os.map((o) => synthesizeOne({
+        teamId: o.teamId,
+        present: presentByTeam[o.teamId] ?? 0,
+        dorm: o.team?.dormHeadcount ?? 0,
+        plan: planByTeam[o.teamId] ?? 0,
+        declared: o.headcount || 0,
+        overtime: o.overtimeCount || 0,
+        nightSnack: o.nightSnackCount || 0,
+        ethnic: o.ethnicCount || 0,
+        isMidnight: s.shift === 'midnight',
+      }));
+      const result = allocate(demandRows, canteen.capacity);
+      for (let idx = 0; idx < os.length; idx++) {
+        const o = os[idx]; const r = result.rows[idx];
+        o.generatedCount = r.allocated;
+        o.status = result.capacityAdjusted ? 'adjusted' : 'generated';
+        o.demandDetail = JSON.stringify({
+          present: r.present, dorm: r.dorm, plan: r.plan, declared: r.declared,
+          baseWorkers: r.baseWorkers, want: r.want, allocated: r.allocated,
+        });
         await this.orders.save(o);
       }
     };

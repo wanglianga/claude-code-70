@@ -10,6 +10,7 @@ import { MealPickup } from '../entities/meal-pickup.entity';
 import { Worker } from '../entities/worker.entity';
 import { Canteen } from '../entities/canteen.entity';
 import { OrgService } from './org.service';
+import { allocate, synthesizeOne } from './allocation';
 
 const SHIFT_NAMES: Record<string, string> = {
   breakfast: '早餐', lunch: '午餐', dinner: '晚餐', midnight: '夜宵',
@@ -129,8 +130,9 @@ export class MealService {
   }
 
   /**
-   * 生成订餐：综合【实名考勤】在岗人数（优先）、申报人数、宿舍人数、临时加班/夜宵需求，
-   * 再受【食堂产能】上限约束（按缺口比例压缩），得出各班组实际生成量。
+   * 生成订餐：需求量由【实名考勤、宿舍人数、施工计划、班组申报】共同合成（可追溯），
+   * 叠加临时加班/夜宵，清真餐保底；再受【食堂产能】硬约束，
+   * 用最大余数法分配，保证各班组分配总和绝不超过产能，压缩时清真餐优先。
    */
   async generateOrders(sessionId: number) {
     const session = await this.sessions.findOne({ where: { id: sessionId } });
@@ -139,35 +141,66 @@ export class MealService {
     const orders = await this.orders.find({ where: { sessionId }, relations: ['team'] });
     if (!orders.length) throw new BadRequestException('尚无班组申报订餐');
 
-    // 夜宵餐次按夜班考勤，其余按白班
-    const attendShift = session.shift === 'midnight' ? 'night' : 'day';
-    const present = await this.org.presentCounts(session.date, attendShift);
+    // 夜宵餐次对应夜班考勤/施工计划，其余对应白班
+    const isMidnight = session.shift === 'midnight';
+    const attendShift = isMidnight ? 'night' : 'day';
+    const presentMap = await this.org.presentCounts(session.date, attendShift);
+    const planMap = await this.org.planCounts(session.date, attendShift);
 
-    const wanted = orders.map((o) => {
-      const base = present[o.teamId] ?? o.headcount; // 有实名考勤以考勤为准，否则用申报人数
-      let want = base + (o.overtimeCount || 0);
-      if (session.shift === 'midnight') want = Math.max(want, o.nightSnackCount || 0) + (o.overtimeCount || 0);
-      want = Math.max(want, o.ethnicCount || 0); // 少数民族餐必须保障
-      return { order: o, want };
-    });
+    // 逐班组合成可追溯需求
+    const demandRows = orders.map((o) => synthesizeOne({
+      teamId: o.teamId,
+      present: presentMap[o.teamId] ?? 0,
+      dorm: o.team?.dormHeadcount ?? 0,
+      plan: planMap[o.teamId]?.plannedWorkers ?? 0,
+      declared: o.headcount || 0,
+      overtime: o.overtimeCount || 0,
+      nightSnack: o.nightSnackCount || 0,
+      ethnic: o.ethnicCount || 0,
+      isMidnight,
+    }));
 
-    let totalWant = wanted.reduce((a, x) => a + x.want, 0);
     const capacity = canteen?.capacity || 9999;
-    const ratio = totalWant > capacity ? capacity / totalWant : 1;
+    const result = allocate(demandRows, capacity);
 
-    for (const { order, want } of wanted) {
-      let gen = Math.round(want * ratio);
-      // 产能不足时，少数民族餐优先保留
-      if (ratio < 1) gen = Math.max(gen, Math.min(order.ethnicCount || 0, gen));
-      order.generatedCount = gen;
-      order.status = ratio < 1 ? 'adjusted' : 'generated';
-      await this.orders.save(order);
+    // 落库：分配量 + 需求分解（可追溯）
+    for (let idx = 0; idx < orders.length; idx++) {
+      const o = orders[idx];
+      const r = result.rows[idx];
+      o.generatedCount = r.allocated;
+      o.status = result.capacityAdjusted ? 'adjusted' : 'generated';
+      o.demandDetail = JSON.stringify({
+        present: r.present, dorm: r.dorm, plan: r.plan, declared: r.declared,
+        overtime: r.overtime, nightSnack: r.nightSnack, ethnic: r.ethnic,
+        baseWorkers: r.baseWorkers, cappedDorm: r.cappedDorm,
+        rawDemand: r.rawDemand, want: r.want,
+        allocated: r.allocated, ethnicAllocated: r.ethnicAllocated, regularAllocated: r.regularAllocated,
+      });
+      await this.orders.save(o);
     }
+
+    const ethnicTotal = result.rows.reduce((a, r) => a + Math.min(r.ethnic, r.want), 0);
+    const ethnicAllocated = result.rows.reduce((a, r) => a + r.ethnicAllocated, 0);
     session.status = 'confirmed';
     await this.sessions.save(session);
+
     return {
-      totalWant, capacity, generated: wanted.reduce((a, x) => a + Math.round(x.want * ratio), 0),
-      capacityAdjusted: ratio < 1,
+      totalWant: result.totalWant,
+      capacity: result.capacity,
+      generated: result.allocated,
+      capacityAdjusted: result.capacityAdjusted,
+      ethnicTotal,
+      ethnicAllocated,
+      // 可追溯的逐班组分解
+      breakdown: result.rows.map((r) => ({
+        teamId: r.teamId,
+        teamName: orders.find((o) => o.teamId === r.teamId)?.team?.name || `班组${r.teamId}`,
+        present: r.present, dorm: r.dorm, plan: r.plan, declared: r.declared,
+        overtime: r.overtime, nightSnack: r.nightSnack, ethnic: r.ethnic,
+        baseWorkers: r.baseWorkers, cappedDorm: r.cappedDorm,
+        want: r.want, allocated: r.allocated,
+        ethnicAllocated: r.ethnicAllocated, regularAllocated: r.regularAllocated,
+      })),
       orders: await this.orders.find({ where: { sessionId }, relations: ['team'] }),
     };
   }

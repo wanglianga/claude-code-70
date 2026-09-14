@@ -86,7 +86,9 @@ docker compose down -v       # 同时删除数据库数据卷（恢复全新演�
 | 需求点 | 实现位置 |
 |---|---|
 | 班组长提交人数/工种/班次/夜宵/少数民族餐/临时加班 | 订餐申报页（可编辑表格） |
-| 依据实名考勤、宿舍人数、施工计划、食堂**产能**生成订餐 | `POST /api/meals/sessions/:id/generate`（考勤优先、加班叠加、产能不足按比例压缩并优先保留清真餐） |
+| 依据实名考勤、宿舍人数、施工计划、食堂**产能**生成订餐 | `POST /api/meals/sessions/:id/generate`：基准上岗=max(考勤,计划,申报)再以宿舍人数封顶；+加班、夜宵 max(夜班基准,夜宵申报)+加班、清真份数保底；超产能用**最大余数法**硬约束分配（总量绝不超过产能、清真优先），逐班组分解写入 `demandDetail` 可追溯 |
+| 施工计划录入 | 订餐页「施工计划录入」（白班/夜班计划上岗人数、作业区）/ `POST /api/org/plans` |
+| 调整宿舍人数 / 食堂产能 | 基础档案页「改宿舍人数 / 改产能」/ `PATCH /api/org/teams/:id`、`PATCH /api/org/canteens/:id` |
 | 备餐：菜单/食材批次/供应商/厨师/留样/温控/分餐时间 | 备餐·留样·配送页 + `meal_preparations` |
 | 食品留样（48h、≥125g、冷藏温控、检测结论） | 留样台账 + `food_samples`（自动算到期时间、合格/异常登记） |
 | 刷脸/扫码取餐 + 个人餐补/企业补贴/自付核算 | 取餐终端 + `POST /api/meals/pickup` |
@@ -122,8 +124,8 @@ docker compose down -v       # 同时删除数据库数据卷（恢复全新演�
 ├── backend/                    # NestJS + TypeORM
 │   ├── Dockerfile              # 多阶段构建，非 root(node)，自带 HEALTHCHECK
 │   └── src/
-│       ├── entities/           # 15 个实体（用户/班组/工人/考勤/食堂/供应商/
-│       │                       #   餐次/订餐/备餐/留样/配送/取餐/异常/动作/月档案）
+│       ├── entities/           # 16 个实体（用户/班组/工人/考勤/施工计划/食堂/供应商/
+│       │                       #   餐次/订餐(含需求分解)/备餐/留样/配送/取餐/异常/动作/月档案）
 │       ├── auth/               # JWT + 角色守卫
 │       ├── modules/            # org / meal / incident / stats 业务模块
 │       └── seed/               # 启动演示数据
@@ -140,7 +142,9 @@ docker compose down -v       # 同时删除数据库数据卷（恢复全新演�
 | POST | `/api/auth/login` | 登录获取 JWT |
 | GET | `/api/meals/sessions?date=` | 餐次列表（含汇总） |
 | POST | `/api/meals/orders` | 班组长订餐申报 |
-| POST | `/api/meals/sessions/:id/generate` | 按考勤+产能生成订餐 |
+| POST | `/api/meals/sessions/:id/generate` | 四来源合成需求 + 最大余数法产能分配（返回逐班组可追溯 breakdown） |
+| GET/POST | `/api/org/plans` | 施工计划（白班/夜班计划上岗人数） |
+| PATCH | `/api/org/teams/:id` `/api/org/canteens/:id` | 调整宿舍人数 / 食堂产能 |
 | POST | `/api/meals/preparations` `/samples` `/deliveries` | 备餐/留样/配送 |
 | POST | `/api/meals/pickup` | 刷脸/扫码取餐并核算费用 |
 | GET/POST | `/api/incidents`、`/:id/actions`、`/:id/resolve` | 异常五方协同 |

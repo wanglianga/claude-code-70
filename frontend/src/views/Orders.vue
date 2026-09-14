@@ -8,7 +8,8 @@
       <div>
         <el-date-picker v-model="date" type="date" value-format="YYYY-MM-DD" :clearable="false" @change="load" />
         <el-button type="primary" :icon="MagicStick" :loading="genLoading" style="margin-left:10px"
-          @click="generate">按考勤+产能生成订餐</el-button>
+          @click="generate">按考勤+宿舍+计划+产能生成订餐</el-button>
+        <el-button :icon="Calendar" @click="openPlan">施工计划录入</el-button>
         <el-button :icon="Plus" @click="openCreate">新建餐次</el-button>
       </div>
     </div>
@@ -92,14 +93,48 @@
         </el-card>
 
         <el-card class="soft-card" v-if="genResult">
-          <div class="section-title"><el-icon><MagicStick /></el-icon>智能生成说明</div>
-          <el-alert :type="genResult.capacityAdjusted ? 'warning' : 'success'" :closable="false">
+          <div class="section-title"><el-icon><MagicStick /></el-icon>需求合成与产能分配（可追溯）</div>
+          <el-alert :type="genResult.capacityAdjusted ? 'warning' : 'success'" :closable="false" style="margin-bottom:10px">
             <template #title>
-              需求合计 {{ genResult.totalWant }} 份，食堂产能 {{ genResult.capacity }} 份；
-              <span v-if="genResult.capacityAdjusted">产能不足，已按比例压缩并优先保留少数民族餐</span>
-              <span v-else>产能充足，按实名考勤在岗人数 + 临时加班足额生成 {{ genResult.generated }} 份</span>
+              合成需求 {{ genResult.totalWant }} 份，食堂产能 {{ genResult.capacity }} 份，
+              <b>实际分配 {{ genResult.generated }} 份</b>；
+              <span v-if="genResult.capacityAdjusted">超产能，最大余数法按比例压缩（清真保底 {{ genResult.ethnicAllocated }}/{{ genResult.ethnicTotal }}）</span>
+              <span v-else>产能充足，足额生成</span>
             </template>
           </el-alert>
+          <el-table :data="genResult.breakdown || []" size="small" border max-height="300">
+            <el-table-column prop="teamName" label="班组" min-width="92" />
+            <el-table-column label="考勤" width="52" align="center">
+              <template #default="{row}">{{ row.present }}</template>
+            </el-table-column>
+            <el-table-column label="宿舍" width="52" align="center">
+              <template #default="{row}">{{ row.dorm }}<el-icon v-if="row.cappedDorm" color="#e6a23c"><Top /></el-icon></template>
+            </el-table-column>
+            <el-table-column label="计划" width="52" align="center">
+              <template #default="{row}">{{ row.plan }}</template>
+            </el-table-column>
+            <el-table-column label="申报" width="52" align="center">
+              <template #default="{row}">{{ row.declared }}</template>
+            </el-table-column>
+            <el-table-column label="加班" width="52" align="center"><template #default="{row}">{{ row.overtime }}</template></el-table-column>
+            <el-table-column label="夜宵" width="52" align="center"><template #default="{row}">{{ row.nightSnack }}</template></el-table-column>
+            <el-table-column label="清真" width="52" align="center">
+              <template #default="{row}"><span :class="row.ethnic?'money-up':''">{{ row.ethnic }}</span></template>
+            </el-table-column>
+            <el-table-column label="合成需求" width="68" align="center">
+              <template #default="{row}"><b>{{ row.want }}</b></template>
+            </el-table-column>
+            <el-table-column label="最终分配" width="70" align="center">
+              <template #default="{row}">
+                <el-tag size="small" :type="genResult.capacityAdjusted?'warning':'success'">{{ row.allocated }}</el-tag>
+                <div v-if="row.ethnicAllocated" style="font-size:11px" class="money-up">含清真{{ row.ethnicAllocated }}</div>
+              </template>
+            </el-table-column>
+          </el-table>
+          <div class="muted" style="font-size:12px;margin-top:6px">
+            基准上岗 = max(考勤, 计划, 申报)，再以宿舍人数封顶 <el-icon><Top /></el-icon>；
+            白班 +加班、夜宵 max(夜班基准,夜宵申报)+加班；需求不低于清真份数；超产能时清真优先、总量绝不超过产能。
+          </div>
         </el-card>
       </el-col>
     </el-row>
@@ -135,13 +170,38 @@
         <el-button type="primary" @click="submitCreate">创建</el-button>
       </template>
     </el-dialog>
+    <!-- 施工计划录入 -->
+    <el-dialog v-model="planVisible" title="施工计划录入（订餐需求量来源之一）" width="640px">
+      <el-alert type="info" :closable="false" style="margin-bottom:12px"
+        :title="`${date} 项目部排班：计划上岗人数会与实名考勤、班组申报取大，并受宿舍人数封顶。夜宵餐次读取「夜班」计划。`" />
+      <el-tabs v-model="planShift" @tab-change="loadPlanRows">
+        <el-tab-pane label="白班计划" name="day" />
+        <el-tab-pane label="夜班计划(夜宵)" name="night" />
+      </el-tabs>
+      <el-table :data="planRows" size="small">
+        <el-table-column label="班组" min-width="120"><template #default="{row}">{{ row.teamName }}</template></el-table-column>
+        <el-table-column label="计划上岗人数" width="150" align="center">
+          <template #default="{row}"><el-input-number v-model="row.plannedWorkers" :min="0" size="small" controls-position="right" /></template>
+        </el-table-column>
+        <el-table-column label="计划作业区" min-width="160">
+          <template #default="{row}"><el-input v-model="row.workArea" size="small" placeholder="3号楼主体/塔吊作业区" /></template>
+        </el-table-column>
+        <el-table-column v-if="planShift==='night'" label="夜间施工" width="90" align="center">
+          <template #default="{row}"><el-switch v-model="row.nightWork" /></template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="planVisible=false">取消</el-button>
+        <el-button type="primary" @click="savePlan">保存施工计划</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { MagicStick, Plus } from '@element-plus/icons-vue';
+import { MagicStick, Plus, Calendar, Top } from '@element-plus/icons-vue';
 import api from '../api';
 
 const SHIFTS = { breakfast: '早餐', lunch: '午餐', dinner: '晚餐', midnight: '夜宵' };
@@ -154,11 +214,17 @@ const sessions = ref([]);
 const activeSession = ref('');
 const orders = ref([]);
 const canteens = ref([]);
+const teams = ref([]);
 const zone = ref('');
 const genLoading = ref(false);
 const genResult = ref(null);
 const createVisible = ref(false);
 const createForm = reactive({ date: date.value, shift: 'lunch', canteenId: null, price: 15, workerSubsidy: 8, companySubsidy: 5, weather: '晴' });
+
+// 施工计划录入
+const planVisible = ref(false);
+const planShift = ref('day');
+const planRows = ref([]);
 
 const session = computed(() => sessions.value.find((s) => String(s.id) === activeSession.value) || null);
 const capacity = computed(() => session.value?.canteen?.capacity || '—');
@@ -166,6 +232,7 @@ const capacity = computed(() => session.value?.canteen?.capacity || '—');
 async function load() {
   sessions.value = await api.get('/meals/sessions', { params: { date: date.value } });
   canteens.value = await api.get('/org/canteens');
+  teams.value = await api.get('/org/teams');
   if (!createForm.canteenId && canteens.value[0]) createForm.canteenId = canteens.value[0].id;
   if (sessions.value.length && !sessions.value.find((s) => String(s.id) === activeSession.value)) {
     activeSession.value = String(sessions.value[0].id);
@@ -229,6 +296,34 @@ async function submitCreate() {
   ElMessage.success('餐次已创建');
   createVisible.value = false;
   await load();
+}
+
+// ---- 施工计划录入 ----
+async function openPlan() {
+  planShift.value = activeSession.value
+    ? (sessions.value.find((s) => String(s.id) === activeSession.value)?.shift === 'midnight' ? 'night' : 'day')
+    : 'day';
+  await loadPlanRows();
+  planVisible.value = true;
+}
+async function loadPlanRows() {
+  const exist = await api.get('/org/plans', { params: { date: date.value, shift: planShift.value } });
+  const map = new Map(exist.map((p) => [p.teamId, p]));
+  planRows.value = teams.value.map((t) => ({
+    teamId: t.id, teamName: t.name,
+    plannedWorkers: map.get(t.id)?.plannedWorkers ?? null,
+    workArea: map.get(t.id)?.workArea || '',
+    nightWork: map.get(t.id)?.nightWork ?? planShift.value === 'night',
+  }));
+}
+async function savePlan() {
+  const rows = planRows.value
+    .filter((r) => r.plannedWorkers !== null && r.plannedWorkers !== '')
+    .map((r) => ({ teamId: r.teamId, shift: planShift.value, plannedWorkers: r.plannedWorkers, workArea: r.workArea, nightWork: r.nightWork }));
+  await api.post('/org/plans', { date: date.value, rows });
+  ElMessage.success('施工计划已保存，可重新生成订餐查看分配变化');
+  planVisible.value = false;
+  await loadOrders();
 }
 
 onMounted(load);

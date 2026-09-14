@@ -4,6 +4,7 @@ import { In, Repository } from 'typeorm';
 import { Team } from '../entities/team.entity';
 import { Worker } from '../entities/worker.entity';
 import { Attendance } from '../entities/attendance.entity';
+import { ConstructionPlan } from '../entities/construction-plan.entity';
 import { Canteen } from '../entities/canteen.entity';
 import { Supplier } from '../entities/supplier.entity';
 
@@ -13,6 +14,7 @@ export class OrgService {
     @InjectRepository(Team) private teams: Repository<Team>,
     @InjectRepository(Worker) private workers: Repository<Worker>,
     @InjectRepository(Attendance) private attendance: Repository<Attendance>,
+    @InjectRepository(ConstructionPlan) private plans: Repository<ConstructionPlan>,
     @InjectRepository(Canteen) private canteens: Repository<Canteen>,
     @InjectRepository(Supplier) private suppliers: Repository<Supplier>,
   ) {}
@@ -102,6 +104,58 @@ export class OrgService {
     const map: Record<number, number> = {};
     for (const r of rows) map[r.worker.teamId] = (map[r.worker.teamId] || 0) + 1;
     return map;
+  }
+
+  /** 当日某班次各班组施工计划上岗人数（订餐生成来源之一） */
+  async planCounts(date: string, shift: string) {
+    const rows = await this.plans.find({ where: { date, shift } });
+    const map: Record<number, ConstructionPlan> = {};
+    for (const r of rows) map[r.teamId] = r;
+    return map;
+  }
+
+  async listPlans(date: string, shift?: string) {
+    return this.plans.find({
+      where: { date, ...(shift ? { shift } : {}) },
+      relations: ['team'], order: { shift: 'ASC', teamId: 'ASC' },
+    });
+  }
+
+  /** 批量保存施工计划（按 date+shift+team 唯一） */
+  async savePlans(date: string, rows: Array<{ teamId: number; shift?: string; plannedWorkers: number; workArea?: string; nightWork?: boolean; note?: string }>) {
+    const saved = [];
+    for (const r of rows) {
+      const shift = r.shift || 'day';
+      let rec = await this.plans.findOne({ where: { date, shift, teamId: r.teamId } });
+      if (!rec) rec = this.plans.create({ date, shift, teamId: r.teamId });
+      rec.plannedWorkers = +r.plannedWorkers || 0;
+      rec.workArea = r.workArea || rec.workArea || '';
+      rec.nightWork = r.nightWork ?? rec.nightWork ?? false;
+      rec.note = r.note ?? rec.note;
+      saved.push(await this.plans.save(rec));
+    }
+    return saved;
+  }
+
+  /** 更新班组（宿舍人数等），用于验证宿舍人数参与订餐生成 */
+  async updateTeam(id: number, dto: Partial<Team>) {
+    const t = await this.teams.findOne({ where: { id } });
+    if (!t) throw new NotFoundException('班组不存在');
+    if (dto.name !== undefined) t.name = dto.name;
+    if (dto.trade !== undefined) t.trade = dto.trade;
+    if (dto.dormHeadcount !== undefined) t.dormHeadcount = +dto.dormHeadcount;
+    return this.teams.save(t);
+  }
+
+  /** 更新食堂（产能等），用于验证产能硬约束 */
+  async updateCanteen(id: number, dto: Partial<Canteen>) {
+    const c = await this.canteens.findOne({ where: { id } });
+    if (!c) throw new NotFoundException('食堂不存在');
+    if (dto.name !== undefined) c.name = dto.name;
+    if (dto.capacity !== undefined) c.capacity = +dto.capacity;
+    if (dto.outsourced !== undefined) c.outsourced = dto.outsourced;
+    if (dto.vendorScore !== undefined) c.vendorScore = +dto.vendorScore;
+    return this.canteens.save(c);
   }
 
   // ---------- 食堂 / 供应商 ----------

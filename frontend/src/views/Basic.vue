@@ -32,6 +32,11 @@
             <el-table-column label="供应商数" width="90" align="center">
               <template #default="{row}">{{ row.suppliers?.length || 0 }}</template>
             </el-table-column>
+            <el-table-column label="操作" width="110" fixed="right">
+              <template #default="{row}">
+                <el-button size="small" link type="primary" @click="editCapacity(row)">改产能</el-button>
+              </template>
+            </el-table-column>
           </el-table>
         </el-card>
 
@@ -64,6 +69,11 @@
             <el-table-column prop="workerCount" label="在册工人" width="100" align="center" />
             <el-table-column label="已实名" width="100" align="center">
               <template #default="{row}">{{ row.verifiedCount }} / {{ row.workerCount }}</template>
+            </el-table-column>
+            <el-table-column label="操作" width="110" fixed="right">
+              <template #default="{row}">
+                <el-button size="small" link type="primary" @click="editDorm(row)">改宿舍人数</el-button>
+              </template>
             </el-table-column>
           </el-table>
         </el-card>
@@ -139,7 +149,7 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus } from '@element-plus/icons-vue';
 import api from '../api';
 
@@ -190,5 +200,26 @@ async function submitReception() {
   });
   ElMessage.success('临时接待工单已发起（食堂/财务协同）');
 }
+
+// ---- 改产能 / 改宿舍人数（用于验证订餐生成的业务约束） ----
+async function editCapacity(row) {
+  const { value } = await ElMessageBox.prompt(`设置「${row.name}」单餐产能（份）`, '调整食堂产能', {
+    inputValue: String(row.capacity), inputPattern: /^\d+$/, inputErrorMessage: '请输入非负整数',
+  }).catch(() => ({ value: null }));
+  if (value === null || value === undefined) return;
+  await api.patch(`/org/canteens/${row.id}`, { capacity: +value });
+  ElMessage.success(`食堂产能已改为 ${value}，重新生成订餐即按新产能硬约束分配`);
+  await load();
+}
+async function editDorm(row) {
+  const { value } = await ElMessageBox.prompt(`设置「${row.name}」宿舍登记人数（0=不限制）`, '调整宿舍人数', {
+    inputValue: String(row.dormHeadcount), inputPattern: /^\d+$/, inputErrorMessage: '请输入非负整数',
+  }).catch(() => ({ value: null }));
+  if (value === null || value === undefined) return;
+  await api.patch(`/org/teams/${row.id}`, { dormHeadcount: +value });
+  ElMessage.success(`宿舍人数已改为 ${value}，重新生成订餐时将封顶/放宽该班组需求`);
+  await load();
+}
+
 onMounted(load);
 </script>

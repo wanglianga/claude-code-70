@@ -12,6 +12,7 @@ import { User } from './entities/user.entity';
 import { Team } from './entities/team.entity';
 import { Worker } from './entities/worker.entity';
 import { Attendance } from './entities/attendance.entity';
+import { ConstructionPlan } from './entities/construction-plan.entity';
 import { Canteen } from './entities/canteen.entity';
 import { Supplier } from './entities/supplier.entity';
 import { MealSession } from './entities/meal-session.entity';
@@ -25,7 +26,7 @@ import { IncidentAction } from './entities/incident-action.entity';
 import { MonthlyArchive } from './entities/monthly-archive.entity';
 
 const entities = [
-  User, Team, Worker, Attendance, Canteen, Supplier, MealSession, MealOrder,
+  User, Team, Worker, Attendance, ConstructionPlan, Canteen, Supplier, MealSession, MealOrder,
   MealPreparation, FoodSample, MealDelivery, MealPickup, Incident, IncidentAction, MonthlyArchive,
 ];
 

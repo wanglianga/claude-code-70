@@ -33,6 +33,8 @@ export class MealOrder {
 
   /** 平台核算后的生成量（依据实名考勤/宿舍人数/施工计划/产能调整） */
   @Column({ default: 0 }) generatedCount: number;
+  /** 需求量四来源分解（JSON 字符串，可追溯）：考勤/宿舍/计划/申报/加班/清真/夜宵/合成需求/保底/最终分配 */
+  @Column({ type: 'text', nullable: true }) demandDetail: string;
   @Column({ default: 0 }) pickedCount: number;
   @Column({ default: 0 }) wastedCount: number;      // 报损/浪费份数
   @Column({ default: 'draft' }) status: string;     // draft 已申报 / generated 已生成 / adjusted 已调整 / cancelled 已取消

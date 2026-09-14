@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { OrgService } from './org.service';
 
@@ -10,6 +10,9 @@ export class OrgController {
   @Get('teams') listTeams() { return this.org.listTeams(); }
   @Get('teams/:id') teamDetail(@Param('id', ParseIntPipe) id: number) { return this.org.teamDetail(id); }
   @Post('teams') createTeam(@Body() dto: any) { return this.org.createTeam(dto); }
+  @Patch('teams/:id') updateTeam(@Param('id', ParseIntPipe) id: number, @Body() dto: any) {
+    return this.org.updateTeam(id, dto);
+  }
 
   @Get('workers') listWorkers(@Query('teamId') teamId?: string, @Query('verified') verified?: string) {
     return this.org.listWorkers(teamId ? +teamId : undefined, verified === undefined ? undefined : verified === 'true');
@@ -31,6 +34,15 @@ export class OrgController {
 
   @Get('canteens') listCanteens() { return this.org.listCanteens(); }
   @Post('canteens') createCanteen(@Body() dto: any) { return this.org.createCanteen(dto); }
+  @Patch('canteens/:id') updateCanteen(@Param('id', ParseIntPipe) id: number, @Body() dto: any) {
+    return this.org.updateCanteen(id, dto);
+  }
+  @Get('plans') listPlans(@Query('date') date: string, @Query('shift') shift?: string) {
+    return this.org.listPlans(date, shift);
+  }
+  @Post('plans') savePlans(@Body() dto: { date: string; rows: any[] }) {
+    return this.org.savePlans(dto.date, dto.rows);
+  }
   @Get('suppliers') listSuppliers(@Query('canteenId') canteenId?: string) {
     return this.org.listSuppliers(canteenId ? +canteenId : undefined);
   }
