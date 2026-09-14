@@ -1,0 +1,25 @@
+:root {
+  --brand: #1f6f54;
+  --brand-dark: #16513e;
+  --bg: #f2f5f4;
+}
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; margin: 0; }
+body {
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: #1f2d2a;
+}
+.page-head { display: flex; align-items: center; justify-content: space-between; margin: 4px 0 16px; }
+.page-head h2 { margin: 0; font-size: 20px; color: var(--brand-dark); }
+.page-head .sub { color: #7a8a86; font-size: 13px; margin-top:4px; }
+.stat-card { border-radius: 12px; border: none; }
+.stat-card .num { font-size: 28px; font-weight: 700; color: var(--brand-dark); }
+.stat-card .lbl { color: #6b7b77; font-size: 13px; }
+.soft-card { border-radius: 12px; }
+.muted { color: #90a09c; }
+.tag-gap { margin-right: 6px; }
+.section-title { font-weight: 600; margin: 6px 0 12px; color: #2a3b37; display:flex; align-items:center; gap:6px; }
+.el-table { border-radius: 8px; }
+.money-up { color: #c45656; font-weight: 600; }
+.money-sub { color: var(--brand); font-weight: 600; }

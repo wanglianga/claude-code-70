@@ -1,0 +1,54 @@
+name: ${COMPOSE_PROJECT_NAME:-task2026-09-1470}
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-canteen}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-canteen_pwd}
+      POSTGRES_DB: ${DB_NAME:-canteen}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # 数据库不发布到宿主，仅在 compose 内网通过服务名 db 访问
+    networks: [canteen-net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-canteen} -d ${DB_NAME:-canteen}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-canteen}
+      DB_PASSWORD: ${DB_PASSWORD:-canteen_pwd}
+      DB_NAME: ${DB_NAME:-canteen}
+      JWT_SECRET: ${JWT_SECRET:-canteen-dev-secret-change-me}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [canteen-net]
+    # 后端也不发布到宿主，仅由 web(nginx) 反代访问
+
+  web:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    ports:
+      # 只把应用(前端+反代API)端口发布到宿主，宿主端口取环境变量 CC_PUBLISH_PORT
+      - "${CC_PUBLISH_PORT:-3070}:8080"
+    depends_on:
+      - backend
+    networks: [canteen-net]
+
+volumes:
+  pgdata:
+
+networks:
+  canteen-net:
+    driver: bridge
