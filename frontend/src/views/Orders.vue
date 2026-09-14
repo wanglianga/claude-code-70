@@ -38,7 +38,7 @@
               食堂产能 {{ capacity }} 份/餐
             </template>
           </el-alert>
-          <el-table :data="orders" stripe size="default">
+          <el-table :data="orders" stripe size="default" class="order-declare-table">
             <el-table-column label="班组" min-width="110">
               <template #default="{ row }">{{ row.team?.name }}</template>
             </el-table-column>
@@ -57,7 +57,7 @@
             </el-table-column>
             <el-table-column label="生成量" width="70" align="center">
               <template #default="{ row }">
-                <el-tag :type="row.status==='adjusted'?'warning':'success'" size="small">{{ row.generatedCount || '—' }}</el-tag>
+                <el-tag :type="orderTagType(row.status)" size="small">{{ row.generatedCount ?? 0 }}</el-tag>
               </template>
             </el-table-column>
             <el-table-column label="操作" width="92" align="center" fixed="right">
@@ -104,6 +104,13 @@
               <span v-else>产能充足，足额生成</span>
             </template>
           </el-alert>
+          <!-- 数字汇总行：零供给时也常驻显示，与接口完全一致 -->
+          <div class="gen-summary" :class="{ 'is-zero': genResult.zeroSupply }">
+            <span>合成需求 <b>{{ genResult.totalWant }}</b> 份</span>
+            <span>食堂产能 <b>{{ genResult.capacity }}</b> 份</span>
+            <span>总生成量(实际分配) <b>{{ genResult.generated }}</b> 份</span>
+            <el-tag v-if="genResult.zeroSupply" type="danger" size="small">零供给·已停餐</el-tag>
+          </div>
           <el-table :data="genResult.breakdown || []" size="small" border max-height="300">
             <el-table-column prop="teamName" label="班组" min-width="92" />
             <el-table-column label="考勤" width="52" align="center">
@@ -128,7 +135,7 @@
             </el-table-column>
             <el-table-column label="最终分配" width="70" align="center">
               <template #default="{row}">
-                <el-tag size="small" :type="genResult.capacityAdjusted?'warning':'success'">{{ row.allocated }}</el-tag>
+                <el-tag size="small" :type="genResult.zeroSupply ? 'danger' : genResult.capacityAdjusted ? 'warning' : 'success'">{{ row.allocated ?? 0 }}</el-tag>
                 <div v-if="row.ethnicAllocated" style="font-size:11px" class="money-up">含清真{{ row.ethnicAllocated }}</div>
               </template>
             </el-table-column>
@@ -210,6 +217,7 @@ const SHIFTS = { breakfast: '早餐', lunch: '午餐', dinner: '晚餐', midnigh
 const shiftName = (s) => SHIFTS[s] || s;
 const statusName = (s) => ({ open: '订餐中', confirmed: '已生成', preparing: '备餐中', serving: '分餐中', closed: '已结束', stopped: '停工取消' }[s] || s);
 const statusType = (s) => ({ open: 'info', confirmed: 'primary', preparing: 'warning', serving: 'success', closed: '', stopped: 'danger' }[s] || '');
+const orderTagType = (s) => (s === 'cancelled' ? 'danger' : s === 'adjusted' ? 'warning' : 'success');
 
 const date = ref(new Date().toISOString().slice(0, 10));
 const sessions = ref([]);
@@ -229,7 +237,10 @@ const planShift = ref('day');
 const planRows = ref([]);
 
 const session = computed(() => sessions.value.find((s) => String(s.id) === activeSession.value) || null);
-const capacity = computed(() => session.value?.canteen?.capacity || '—');
+const capacity = computed(() => {
+  const c = session.value?.canteen?.capacity;
+  return c === null || c === undefined ? '—' : c; // 0 必须显示为 0（零供给）
+});
 
 async function load() {
   sessions.value = await api.get('/meals/sessions', { params: { date: date.value } });
@@ -250,7 +261,40 @@ async function loadOrders() {
   const idx = sessions.value.findIndex((x) => x.id === id);
   if (idx >= 0) sessions.value[idx] = s;
   zone.value = orders.value.find((o) => o.deliveryZone)?.deliveryZone || '';
-  genResult.value = null;
+  // 零供给（产能0）结果需持续可见：切走再切回/重新进入时，依据餐次与订单状态重建结果卡
+  const canteenCap = s.canteen ? Number(s.canteen.capacity) : -1;
+  const isZero = s.status === 'stopped' && canteenCap === 0 && (s.generatedCount ?? 0) === 0 && orders.value.length > 0;
+  if (isZero) {
+    genResult.value = buildZeroResult(s, orders.value);
+  } else if (genResult.value && genResult.value.sessionId !== id) {
+    genResult.value = null; // 仅当结果属于其它餐次时才清空
+  }
+}
+
+/** 依据已落库的餐次/订单（含 demandDetail）重建零供给结果，保证刷新/切换后仍可见且与接口一致 */
+function buildZeroResult(s, ords) {
+  const breakdown = ords.map((o) => {
+    let dd = {};
+    try { dd = o.demandDetail ? JSON.parse(o.demandDetail) : {}; } catch { dd = {}; }
+    return {
+      teamId: o.teamId, teamName: o.team?.name || `班组${o.teamId}`,
+      present: dd.present ?? 0, dorm: dd.dorm ?? 0, plan: dd.plan ?? 0,
+      declared: dd.declared ?? o.headcount ?? 0,
+      overtime: dd.overtime ?? o.overtimeCount ?? 0,
+      nightSnack: dd.nightSnack ?? o.nightSnackCount ?? 0,
+      ethnic: dd.ethnic ?? o.ethnicCount ?? 0,
+      cappedDorm: dd.cappedDorm ?? false,
+      want: dd.want ?? 0,
+      allocated: o.generatedCount ?? 0,
+      ethnicAllocated: dd.ethnicAllocated ?? 0,
+    };
+  });
+  return {
+    sessionId: s.id, zeroSupply: true, capacityAdjusted: true,
+    capacity: Number(s.canteen.capacity), generated: s.generatedCount ?? 0,
+    totalWant: breakdown.reduce((a, b) => a + b.want, 0),
+    ethnicTotal: 0, ethnicAllocated: 0, breakdown,
+  };
 }
 
 async function saveOrder(row) {
@@ -273,11 +317,18 @@ async function saveZone() {
 
 async function generate() {
   genLoading.value = true;
+  const sid = +activeSession.value;
   try {
-    genResult.value = await api.post(`/meals/sessions/${activeSession.value}/generate`);
-    orders.value = genResult.value.orders;
-    ElMessage.success('订餐已根据实名考勤与食堂产能生成');
-    await loadOrders();
+    const res = await api.post(`/meals/sessions/${sid}/generate`);
+    res.sessionId = sid;
+    genResult.value = res;
+    orders.value = res.orders;
+    if (res.zeroSupply) {
+      ElMessage.error('食堂产能为 0：已停餐，总生成量 0，餐次取消');
+    } else {
+      ElMessage.success('订餐已根据实名考勤、宿舍、施工计划与食堂产能生成');
+    }
+    await loadOrders(); // 刷新右侧汇总与表格；同餐次会保留 genResult（零供给提示持续可见）
   } finally { genLoading.value = false; }
 }
 
@@ -330,3 +381,15 @@ async function savePlan() {
 
 onMounted(load);
 </script>
+
+<style scoped>
+.gen-summary {
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  padding: 10px 14px; margin-bottom: 12px;
+  background: #f4f8f6; border: 1px solid #dcebe4; border-radius: 8px;
+  font-size: 14px; color: #35504a;
+}
+.gen-summary b { color: #16513e; font-size: 18px; margin: 0 2px; }
+.gen-summary.is-zero { background: #fef0f0; border-color: #f5c2c2; }
+.gen-summary.is-zero b { color: #c45656; }
+</style>
