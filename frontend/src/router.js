@@ -10,6 +10,7 @@ const routes = [
       { path: 'dashboard', name: '管理看板', component: () => import('./views/Dashboard.vue') },
       { path: 'orders', name: '订餐申报', component: () => import('./views/Orders.vue') },
       { path: 'canteen', name: '备餐留样配送', component: () => import('./views/Canteen.vue') },
+      { path: 'extra', name: '夜间加餐', component: () => import('./views/ExtraMeal.vue') },
       { path: 'pickup', name: '取餐终端', component: () => import('./views/Pickup.vue') },
       { path: 'incidents', name: '异常协同', component: () => import('./views/Incidents.vue') },
       { path: 'archive', name: '结算与后勤档案', component: () => import('./views/Archive.vue') },

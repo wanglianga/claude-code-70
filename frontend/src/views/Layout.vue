@@ -10,6 +10,7 @@
         <el-menu-item index="/dashboard"><el-icon><DataLine /></el-icon><span>管理看板</span></el-menu-item>
         <el-menu-item index="/orders"><el-icon><EditPen /></el-icon><span>订餐申报/生成</span></el-menu-item>
         <el-menu-item index="/canteen"><el-icon><Bowl /></el-icon><span>备餐·留样·配送</span></el-menu-item>
+        <el-menu-item index="/extra"><el-icon><MoonNight /></el-icon><span>夜间加班加餐</span></el-menu-item>
         <el-menu-item index="/pickup"><el-icon><Avatar /></el-icon><span>取餐终端</span></el-menu-item>
         <el-menu-item index="/incidents"><el-icon><Warning /></el-icon><span>异常协同</span></el-menu-item>
         <el-menu-item index="/archive"><el-icon><Document /></el-icon><span>结算/后勤档案</span></el-menu-item>

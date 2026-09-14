@@ -32,9 +32,16 @@
             <el-table-column label="供应商数" width="90" align="center">
               <template #default="{row}">{{ row.suppliers?.length || 0 }}</template>
             </el-table-column>
-            <el-table-column label="操作" width="110" fixed="right">
+            <el-table-column label="夜宵值班/食材余量" width="150" align="center">
+              <template #default="{row}">
+                <el-tag size="small" :type="row.nightDuty?'success':'danger'">{{ row.nightDuty ? '值班' : '未值班' }}</el-tag>
+                <div class="muted" style="font-size:12px">余量 {{ row.ingredientStock ?? 0 }} 份</div>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="200" fixed="right">
               <template #default="{row}">
                 <el-button size="small" link type="primary" @click="editCapacity(row)">改产能</el-button>
+                <el-button size="small" link type="warning" @click="editNight(row)">夜宵值班/余量</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -115,6 +122,22 @@
       </template>
     </el-dialog>
 
+    <!-- 夜宵值班 / 食材余量 -->
+    <el-dialog v-model="nightVisible" title="夜宵值班与食材余量（加餐检查依赖）" width="460px">
+      <el-form :model="nightForm" label-width="110px">
+        <el-form-item label="夜宵值班">
+          <el-switch v-model="nightForm.nightDuty" active-text="已安排值班" inactive-text="未值班" />
+        </el-form-item>
+        <el-form-item label="值班厨师"><el-input v-model="nightForm.nightDutyChef" /></el-form-item>
+        <el-form-item label="值班电话"><el-input v-model="nightForm.nightDutyPhone" /></el-form-item>
+        <el-form-item label="食材余量(份)"><el-input-number v-model="nightForm.ingredientStock" :min="0" /></el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="nightVisible=false">取消</el-button>
+        <el-button type="primary" @click="submitNight">保存</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="supplierVisible" title="新增供应商" width="460px">
       <el-form :model="supplierForm" label-width="92px">
         <el-form-item label="名称"><el-input v-model="supplierForm.name" /></el-form-item>
@@ -160,6 +183,8 @@ const teamDetails = ref([]);
 
 const canteenVisible = ref(false);
 const canteenForm = reactive({ name: '', outsourced: true, capacity: 200, manager: '', phone: '' });
+const nightVisible = ref(false);
+const nightForm = reactive({ id: null, nightDuty: false, nightDutyChef: '', nightDutyPhone: '', ingredientStock: 0 });
 const supplierVisible = ref(false);
 const supplierForm = reactive({ name: '', canteenId: null, contact: '', phone: '', licenseNo: '' });
 const teamVisible = ref(false);
@@ -219,6 +244,24 @@ async function editDorm(row) {
   await api.patch(`/org/teams/${row.id}`, { dormHeadcount: +value });
   ElMessage.success(`宿舍人数已改为 ${value}，重新生成订餐时将封顶/放宽该班组需求`);
   await load();
+}
+
+// ---- 夜宵值班 / 食材余量 ----
+function editNight(row) {
+  Object.assign(nightForm, {
+    id: row.id, nightDuty: !!row.nightDuty,
+    nightDutyChef: row.nightDutyChef || '', nightDutyPhone: row.nightDutyPhone || '',
+    ingredientStock: row.ingredientStock ?? 0,
+  });
+  nightVisible.value = true;
+}
+async function submitNight() {
+  await api.patch(`/org/canteens/${nightForm.id}`, {
+    nightDuty: nightForm.nightDuty, nightDutyChef: nightForm.nightDutyChef,
+    nightDutyPhone: nightForm.nightDutyPhone, ingredientStock: nightForm.ingredientStock,
+  });
+  ElMessage.success(nightForm.nightDuty ? '夜宵值班已开启，余量已更新' : '夜宵值班已关闭');
+  nightVisible.value = false; await load();
 }
 
 onMounted(load);

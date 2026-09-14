@@ -6,6 +6,7 @@ import { OrgModule } from './modules/org.module';
 import { MealModule } from './modules/meal.module';
 import { IncidentModule } from './modules/incident.module';
 import { StatsModule } from './modules/stats.module';
+import { ExtraMealModule } from './modules/extra-meal.module';
 import { HealthController } from './health.controller';
 import { SeedService } from './seed/seed.service';
 import { User } from './entities/user.entity';
@@ -21,13 +22,18 @@ import { MealPreparation } from './entities/meal-preparation.entity';
 import { FoodSample } from './entities/food-sample.entity';
 import { MealDelivery } from './entities/meal-delivery.entity';
 import { MealPickup } from './entities/meal-pickup.entity';
+import { ExtraMeal } from './entities/extra-meal.entity';
+import { ExtraMealPoint } from './entities/extra-meal-point.entity';
+import { ExtraMealPickup } from './entities/extra-meal-pickup.entity';
 import { Incident } from './entities/incident.entity';
 import { IncidentAction } from './entities/incident-action.entity';
 import { MonthlyArchive } from './entities/monthly-archive.entity';
 
 const entities = [
   User, Team, Worker, Attendance, ConstructionPlan, Canteen, Supplier, MealSession, MealOrder,
-  MealPreparation, FoodSample, MealDelivery, MealPickup, Incident, IncidentAction, MonthlyArchive,
+  MealPreparation, FoodSample, MealDelivery, MealPickup,
+  ExtraMeal, ExtraMealPoint, ExtraMealPickup,
+  Incident, IncidentAction, MonthlyArchive,
 ];
 
 @Module({
@@ -46,7 +52,7 @@ const entities = [
       retryDelay: 3000,
     }),
     TypeOrmModule.forFeature(entities),
-    AuthModule, OrgModule, MealModule, IncidentModule, StatsModule,
+    AuthModule, OrgModule, MealModule, IncidentModule, StatsModule, ExtraMealModule,
   ],
   controllers: [HealthController],
   providers: [SeedService],

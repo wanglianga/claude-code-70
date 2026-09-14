@@ -15,6 +15,9 @@ import { MealPreparation } from '../entities/meal-preparation.entity';
 import { FoodSample } from '../entities/food-sample.entity';
 import { MealDelivery } from '../entities/meal-delivery.entity';
 import { MealPickup } from '../entities/meal-pickup.entity';
+import { ExtraMeal } from '../entities/extra-meal.entity';
+import { ExtraMealPoint } from '../entities/extra-meal-point.entity';
+import { ExtraMealPickup } from '../entities/extra-meal-pickup.entity';
 import { Incident } from '../entities/incident.entity';
 import { allocate, synthesizeOne } from '../modules/allocation';
 
@@ -35,6 +38,9 @@ export class SeedService implements OnModuleInit {
     @InjectRepository(FoodSample) private samples: Repository<FoodSample>,
     @InjectRepository(MealDelivery) private deliveries: Repository<MealDelivery>,
     @InjectRepository(MealPickup) private pickups: Repository<MealPickup>,
+    @InjectRepository(ExtraMeal) private extras: Repository<ExtraMeal>,
+    @InjectRepository(ExtraMealPoint) private extraPoints: Repository<ExtraMealPoint>,
+    @InjectRepository(ExtraMealPickup) private extraPickups: Repository<ExtraMealPickup>,
     @InjectRepository(Incident) private incidents: Repository<Incident>,
   ) {}
 
@@ -69,6 +75,8 @@ export class SeedService implements OnModuleInit {
     const canteen = await this.canteens.save(this.canteens.create({
       name: '工地第一食堂（外包-鸿福餐饮）', capacity: 260, outsourced: true,
       manager: '周师傅', phone: '13800000003', vendorScore: 88,
+      nightDuty: true, nightDutyChef: '夜班李厨', nightDutyPhone: '13700000099',
+      ingredientStock: 60,
     }));
     const sup1 = await this.suppliers.save(this.suppliers.create({
       name: '绿源蔬菜配送', contact: '刘老板', phone: '13911110001', licenseNo: 'SC2025001', canteenId: canteen.id,
@@ -283,6 +291,46 @@ export class SeedService implements OnModuleInit {
     const dinnerPicks = await seedPickups(dinner, 0.85, false);
     const nightPicks = await seedPickups(midnight, 0.9, false);
     const totalPicks = lunchPicks + dinnerPicks + nightPicks;
+
+    // ---- 夜间加班临时加餐：混凝土浇筑到深夜（归入夜宵餐次） ----
+    const photoSVG = encodeURIComponent(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><rect width="160" height="90" fill="#274"/> <text x="80" y="50" font-size="13" fill="#fff" text-anchor="middle">送达照片</text></svg>',
+    );
+    const extra = await this.extras.save(this.extras.create({
+      sessionId: midnight.id, canteenId: canteen.id, requesterId: foreman2.id,
+      date: today, reason: '项目部临时安排 2#楼混凝土浇筑到深夜，作业人员需加餐',
+      requestedCount: 7, confirmedCount: 7, menu: '夜班加餐：热粥、肉包、卤蛋',
+      price: 12, workerSubsidy: 0, companySubsidy: 12, selfPay: 0,
+      status: 'received', highRisk: true,
+      safetyNote: '已确认东侧专用通道送餐，塔吊点停留≤10分钟，全程佩戴安全帽并设警戒',
+      safetyUserId: safetyUser.id, safetyConfirmedAt: new Date(Date.now() - 90 * 60e3),
+      canteenUserId: canteenUser.id, canteenConfirmedAt: new Date(Date.now() - 70 * 60e3),
+    }));
+    // 配送点1：塔吊底部安全平台（高风险），足额签收
+    const pA = await this.extraPoints.save(this.extraPoints.create({
+      extraMealId: extra.id, teamId: teamRows[1].id, pointName: '2#塔吊底部安全平台',
+      route: '食堂→东侧施工通道→2#塔吊底部安全平台', stayMinutes: 8,
+      sentCount: 3, receivedCount: 3, remainingCount: 0, receiver: '胡满仓', receiverPhone: '13700001111',
+      temp: 62, arrivedAt: new Date(Date.now() - 55 * 60e3),
+      photo: `data:image/svg+xml,${photoSVG}`, status: 'received',
+    }));
+    // 配送点2：夜间浇筑区，送达4份签收3份，剩余1份（漏领预警）
+    const pB = await this.extraPoints.save(this.extraPoints.create({
+      extraMealId: extra.id, teamId: teamRows[0].id, pointName: '夜间浇筑区',
+      route: '食堂→南门→地下车库入口→夜间浇筑区', stayMinutes: 15,
+      sentCount: 4, receivedCount: 3, remainingCount: 1, receiver: '陈大柱', receiverPhone: '13700001122',
+      temp: 60, arrivedAt: new Date(Date.now() - 50 * 60e3),
+      photo: `data:image/svg+xml,${photoSVG}`, status: 'received',
+    }));
+    // 领取人员（6 人，企业全额承担），演示用，不重复写入夜宵餐次取餐表以免取餐率超 100%
+    const nightWorkers = savedWorkers.filter((w) => [teamRows[1].id, teamRows[0].id].includes(w.teamId)).slice(0, 6);
+    for (let k = 0; k < nightWorkers.length; k++) {
+      await this.extraPickups.save(this.extraPickups.create({
+        extraMealId: extra.id, pointId: k < 3 ? pA.id : pB.id,
+        workerId: nightWorkers[k].id, teamId: nightWorkers[k].teamId, method: k % 2 ? 'face' : 'code',
+        price: 12, workerSubsidy: 0, companySubsidy: 12, selfPay: 0, operator: '夜间加餐',
+      }));
+    }
 
     // ---- 异常协同（多方同一餐次） ----
     await this.incidents.save(this.incidents.create({

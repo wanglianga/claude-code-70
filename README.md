@@ -100,6 +100,7 @@ docker compose down -v       # 同时删除数据库数据卷（恢复全新演�
 | 项目部临时接待 | 基础档案页一键发起 `RECEPTION` 工单（食堂加备、财务单独核算，不占工人餐补） |
 | 夜间施工点分散 | 夜宵送餐记录（区域/路线/份数/保温温度/配送员） |
 | 高温/雨天/封闭区送餐与安全结合 | 送餐安全确认项（高空警戒、安全帽、封闭区登记、雨天防滑、夜间照明）+ `WEATHER` 工单 |
+| **夜间加班临时加餐** | 「夜间加班加餐」页：班组长发起，平台检查**食堂值班/食材余量/配送点/餐补规则**；高风险作业区（塔吊/高空/封闭/深基坑等）须**安全员确认送餐路线与停留时间**；多施工点分别记录**签收人/温度/剩余/送达照片**，剩余触发漏领预警；刷脸/扫码领取，**夜间加餐企业全额承担（个人0元）**，费用与领取人员归入当夜宵餐次 |
 | 班组取餐率/浪费率/投诉类型看板 | 管理看板（ECharts 柱状/饼图/餐费构成）+ 分班组明细表 |
 
 ---
@@ -147,5 +148,8 @@ docker compose down -v       # 同时删除数据库数据卷（恢复全新演�
 | PATCH | `/api/org/teams/:id` `/api/org/canteens/:id` | 调整宿舍人数 / 食堂产能 |
 | POST | `/api/meals/preparations` `/samples` `/deliveries` | 备餐/留样/配送 |
 | POST | `/api/meals/pickup` | 刷脸/扫码取餐并核算费用 |
+| POST | `/api/extra-meals/precheck` `/extra-meals` | 加餐四项检查 / 班组长发起加餐 |
+| POST | `/api/extra-meals/:id/safety` `/canteen-confirm` | 安全员确认高风险路线停留 / 食堂备餐扣余量 |
+| POST | `/api/extra-meals/points/:pid/depart` `/receive`、`/extra-meals/pickup` | 多点出发/签收（签收人/温度/剩余/照片）/领取归餐次 |
 | GET/POST | `/api/incidents`、`/:id/actions`、`/:id/resolve` | 异常五方协同 |
 | GET | `/api/stats/dashboard`、POST `/api/stats/settle` | 看板与月底结算 |

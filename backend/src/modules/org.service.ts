@@ -147,14 +147,17 @@ export class OrgService {
     return this.teams.save(t);
   }
 
-  /** 更新食堂（产能等），用于验证产能硬约束 */
+  /** 更新食堂（产能、夜宵值班、食材余量等），用于验证产能硬约束与加餐检查 */
   async updateCanteen(id: number, dto: Partial<Canteen>) {
     const c = await this.canteens.findOne({ where: { id } });
     if (!c) throw new NotFoundException('食堂不存在');
-    if (dto.name !== undefined) c.name = dto.name;
-    if (dto.capacity !== undefined) c.capacity = +dto.capacity;
-    if (dto.outsourced !== undefined) c.outsourced = dto.outsourced;
-    if (dto.vendorScore !== undefined) c.vendorScore = +dto.vendorScore;
+    const fields: (keyof Canteen)[] = [
+      'name', 'capacity', 'outsourced', 'vendorScore',
+      'nightDuty', 'nightDutyChef', 'nightDutyPhone', 'ingredientStock',
+    ];
+    for (const f of fields) {
+      if (dto[f] !== undefined) (c as any)[f] = dto[f];
+    }
     return this.canteens.save(c);
   }
 
