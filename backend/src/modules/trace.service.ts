@@ -1,6 +1,7 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
+import { TRACE_ROLES } from './trace.roles';
 import { TraceEvent } from '../entities/trace-event.entity';
 import { DiscomfortReport } from '../entities/discomfort-report.entity';
 import { ContactPerson } from '../entities/contact-person.entity';
@@ -66,21 +67,29 @@ export class TraceService {
     });
   }
 
+  /**
+   * 事件详情：主表 + 6 个一对多集合各自独立查询，避免多集合 JOIN 产生笛卡尔积
+   * （单次大 JOIN 行数 ≈ reports×contacts×submissions×usages×tasks×actions，
+   *   曾导致含 24 人名单的事件详情约 20s、种子多次调用使首次启动约 107s）。
+   * 7 条查询并发执行，无连接表膨胀。
+   */
   async detail(id: number) {
     const ev = await this.events.findOne({
       where: { id },
-      relations: [
-        'session', 'supplier', 'reporter',
-        'reports', 'reports.worker', 'reports.team', 'reports.recorder',
-        'contacts', 'contacts.team',
-        'submissions', 'submissions.sample', 'submissions.operator',
-        'batchUsages', 'batchUsages.session',
-        'tasks', 'tasks.assignee',
-        'actions', 'actions.actor',
-      ],
-    } as any);
+      relations: ['session', 'supplier', 'reporter'],
+    });
     if (!ev) throw new NotFoundException('追溯事件不存在');
-    return ev;
+
+    const [reports, contacts, submissions, batchUsages, tasks, actions] = await Promise.all([
+      this.reports.find({ where: { traceEventId: id }, relations: ['worker', 'team', 'recorder'], order: { id: 'ASC' } }),
+      this.contacts.find({ where: { traceEventId: id }, relations: ['team'], order: { id: 'ASC' } }),
+      this.submissions.find({ where: { traceEventId: id }, relations: ['sample', 'operator'], order: { id: 'ASC' } }),
+      this.usages.find({ where: { traceEventId: id }, relations: ['session'], order: { id: 'ASC' } }),
+      this.tasks.find({ where: { traceEventId: id }, relations: ['assignee'], order: { id: 'ASC' } }),
+      this.actions.find({ where: { traceEventId: id }, relations: ['actor'], order: { id: 'ASC' } }),
+    ]);
+
+    return { ...ev, reports, contacts, submissions, batchUsages, tasks, actions };
   }
 
   private async nextCode(): Promise<string> {
@@ -238,11 +247,16 @@ export class TraceService {
       order: { id: 'ASC' },
     });
     const symptomaticNames = new Set((await this.reports.find({ where: { traceEventId: id } })).map((r) => r.workerName));
+    // 已在名单中的工人一次性查出，避免逐条 exists 查询（N+1）
+    const existing = await this.contacts.find({ where: { traceEventId: id } });
+    const existingWorkerIds = new Set(existing.map((c) => c.workerId).filter(Boolean));
+    const existingNames = new Set(existing.filter((c) => !c.workerId).map((c) => c.workerName));
     let created = 0;
+    const toSave: ContactPerson[] = [];
     for (const p of pickups) {
-      const exists = await this.contacts.findOne({ where: { traceEventId: id, workerId: p.workerId } });
-      if (exists) continue;
-      await this.contacts.save(this.contacts.create({
+      if (p.workerId && existingWorkerIds.has(p.workerId)) continue;
+      if (!p.workerId && existingNames.has(p.worker?.name)) continue;
+      toSave.push(this.contacts.create({
         traceEventId: id,
         workerId: p.workerId,
         workerName: p.worker?.name || `工人#${p.workerId}`,
@@ -253,7 +267,9 @@ export class TraceService {
         symptomatic: symptomaticNames.has(p.worker?.name),
       }));
       created++;
+      if (p.workerId) existingWorkerIds.add(p.workerId);
     }
+    if (toSave.length) await this.contacts.save(toSave);
     await this.log(id, 'notify', `生成同餐次人员名单：本餐次取餐 ${pickups.length} 人，新增 ${created} 人，纳入回访与停餐观察范围`, user);
     return this.detail(id);
   }
@@ -304,8 +320,9 @@ export class TraceService {
     return this.detail(id);
   }
 
-  // ---------------------------------------------------------------- 供应商暂停/恢复
+  // ---------------------------------------------------------------- 供应商暂停/恢复（仅 PROJECT/ADMIN，服务端二次断言）
   async suspendSupplier(id: number, dto: { supplierId: number; reason?: string }, user: AuthUser) {
+    this.assertRole(user, TRACE_ROLES.SUPPLIER, '暂停/恢复供应商');
     const ev = await this.requireEvent(id);
     const sup = await this.suppliers.findOne({ where: { id: +dto.supplierId } });
     if (!sup) throw new NotFoundException('供应商不存在');
@@ -325,6 +342,7 @@ export class TraceService {
   }
 
   async resumeSupplier(id: number, dto: { note?: string }, user: AuthUser) {
+    this.assertRole(user, TRACE_ROLES.SUPPLIER, '暂停/恢复供应商');
     const ev = await this.requireEvent(id);
     if (!ev.supplierId) throw new BadRequestException('事件未关联供应商');
     const sup = await this.suppliers.findOne({ where: { id: ev.supplierId } });
@@ -344,6 +362,7 @@ export class TraceService {
 
   // ---------------------------------------------------------------- 留样送检
   async submitSample(id: number, dto: any, user: AuthUser) {
+    this.assertRole(user, TRACE_ROLES.SUBMIT_SAMPLE, '留样送检');
     const ev = await this.requireEvent(id);
     let boxNo = dto.sampleBoxNo || null;
     let dishName = dto.dishName || '';
@@ -386,6 +405,7 @@ export class TraceService {
    *  - 全部有结果后事件进入整改阶段。
    */
   async recordLabResult(id: number, submissionId: number, dto: { result: string; labReport?: string; penaltyAmount?: number }, user: AuthUser) {
+    this.assertRole(user, TRACE_ROLES.LAB_RESULT, '登记检测结果');
     const ev = await this.requireEvent(id);
     const sub = await this.submissions.findOne({ where: { id: submissionId, traceEventId: id }, relations: ['sample'] });
     if (!sub) throw new NotFoundException('送检单不存在');
@@ -450,6 +470,7 @@ export class TraceService {
    * 记录同批食材是否已用于其他餐次，明确供应商追责范围。
    */
   async scanBatch(id: number, dto: { ingredientBatch?: string }, user: AuthUser) {
+    this.assertRole(user, TRACE_ROLES.BATCH, '同批食材扫描');
     const ev = await this.requireEvent(id);
     const batch = (dto.ingredientBatch || ev.ingredientBatch || '').trim();
     if (!batch) throw new BadRequestException('请先填写食材批次号');
@@ -494,6 +515,7 @@ export class TraceService {
   }
 
   async setBatchUsage(id: number, usageId: number, dto: { status?: string; exposed?: boolean; riskNote?: string }, user: AuthUser) {
+    this.assertRole(user, TRACE_ROLES.BATCH, '同批食材处置');
     const u = await this.usages.findOne({ where: { id: usageId, traceEventId: id } });
     if (!u) throw new NotFoundException('批次用途记录不存在');
     if (dto.status) u.status = dto.status;
@@ -565,6 +587,7 @@ export class TraceService {
       t.result = dto.result || t.result;
       await this.log(id, 'task_done', `整改完成：${t.title}（${t.result || '已整改'}）`, user);
     } else if (dto.status === 'verified') {
+      this.assertRole(user, TRACE_ROLES.TASK_VERIFY, '整改验收');
       t.status = 'verified';
       t.verifiedAt = new Date();
       await this.log(id, 'task_verify', `整改验收通过：${t.title}`, user);
@@ -578,6 +601,7 @@ export class TraceService {
 
   // ---------------------------------------------------------------- 结案
   async close(id: number, dto: { conclusion: string; responsibleParty?: string; resumeSupplier?: boolean }, user: AuthUser) {
+    this.assertRole(user, TRACE_ROLES.SUPPLIER, '事件结案');
     const ev = await this.requireEvent(id);
     if (!dto.conclusion) throw new BadRequestException('请填写结案结论');
     const openTasks = await this.tasks.count({ where: { traceEventId: id, status: In(['open', 'done']) } });
@@ -594,6 +618,7 @@ export class TraceService {
   }
 
   async reopen(id: number, user: AuthUser) {
+    this.assertRole(user, TRACE_ROLES.SUPPLIER, '重新打开事件');
     const ev = await this.requireEvent(id);
     ev.status = 'rectifying';
     ev.closedAt = null;
@@ -638,6 +663,12 @@ export class TraceService {
   }
 
   // ---------------------------------------------------------------- helpers
+  private assertRole(user: AuthUser, roles: readonly string[], action: string) {
+    if (!roles.includes(user.role)) {
+      throw new ForbiddenException(`无权限执行「${action}」，需要角色: ${roles.join('/')}`);
+    }
+  }
+
   private async requireEvent(id: number): Promise<TraceEvent> {
     const ev = await this.events.findOne({ where: { id } });
     if (!ev) throw new NotFoundException('追溯事件不存在');

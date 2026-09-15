@@ -5,7 +5,8 @@
         <h2>食品不适追溯（腹痛/呕吐聚集事件）</h2>
         <div class="sub">多名工人反馈腹痛或呕吐时，收集取餐时间、菜品、班组、留样编号与就医记录；项目部可暂停食材供应商、送检留样、通知同餐次人员停餐观察，并生成安全整改任务；送检结果同步供应商档案，同批食材去向明确追责范围</div>
       </div>
-      <el-button type="primary" :icon="Plus" @click="openCreate">新建追溯事件</el-button>
+      <el-button v-if="can('create')" type="primary" :icon="Plus" @click="openCreate">新建追溯事件</el-button>
+      <el-tag v-else type="info" effect="plain">只读视图（处置操作需班组长/食堂/安全员/项目部权限）</el-tag>
     </div>
 
     <!-- 看板统计 -->
@@ -64,7 +65,7 @@
                 {{ current.code }} · 建档人 {{ current.reporter?.name || '—' }} · {{ fmt(current.createdAt) }}
               </div>
             </div>
-            <div>
+            <div v-if="can('supplier')">
               <el-button v-if="current.status !== 'closed'" type="danger" plain size="small"
                 @click="openSuspend" :disabled="current.supplier?.status === 'suspended'">暂停供应商</el-button>
               <el-button v-if="current.supplier?.status === 'suspended'" type="success" plain size="small" @click="resumeSupplier">恢复供应商</el-button>
@@ -104,7 +105,7 @@
             <!-- 个案报告 -->
             <el-tab-pane :label="`个案报告 (${current.reports?.length || 0})`" name="reports">
               <div style="margin-bottom:10px">
-                <el-button type="primary" size="small" :icon="Plus" @click="openReport">登记工人不适/就医</el-button>
+                <el-button v-if="can('create')" type="primary" size="small" :icon="Plus" @click="openReport">登记工人不适/就医</el-button>
                 <span class="muted" style="margin-left:10px;font-size:12px">逐人收集取餐时间、菜品、班组、留样编号与就医记录</span>
               </div>
               <el-table :data="current.reports || []" stripe size="small">
@@ -148,7 +149,8 @@
                 </el-table-column>
                 <el-table-column label="操作" width="90" fixed="right">
                   <template #default="{ row }">
-                    <el-button link type="primary" size="small" @click="openMedical(row)">就医更新</el-button>
+                    <el-button v-if="can('create')" link type="primary" size="small" @click="openMedical(row)">就医更新</el-button>
+                    <span v-else class="muted">—</span>
                   </template>
                 </el-table-column>
               </el-table>
@@ -157,8 +159,9 @@
             <!-- 同餐次名单 -->
             <el-tab-pane :label="`同餐次名单 (${current.contacts?.length || 0})`" name="contacts">
               <el-space wrap style="margin-bottom:10px">
-                <el-button type="primary" size="small" @click="buildContacts">从取餐流水生成名单</el-button>
-                <el-button type="warning" size="small" :disabled="!current.contacts?.length" @click="openNotify">通知并停餐观察</el-button>
+                <el-button v-if="can('create')" type="primary" size="small" @click="buildContacts">从取餐流水生成名单</el-button>
+                <el-button v-if="can('create')" type="warning" size="small" :disabled="!current.contacts?.length" @click="openNotify">通知并停餐观察</el-button>
+                <span v-if="!can('create')" class="muted" style="font-size:12px">同餐次名单只读，通知/停餐观察由班组长/食堂/安全员/项目部执行</span>
               </el-space>
               <el-row :gutter="10" style="margin-bottom:10px">
                 <el-col :span="6"><el-alert type="info" :closable="false" :title="`名单 ${current.contacts?.length || 0} 人`" /></el-col>
@@ -201,7 +204,7 @@
                   </template>
                 </el-table-column>
                 <el-table-column label="操作" width="80" fixed="right">
-                  <template #default="{ row }"><el-button link type="primary" size="small" @click="openFollow(row)">回访</el-button></template>
+                  <template #default="{ row }"><el-button v-if="can('create')" link type="primary" size="small" @click="openFollow(row)">回访</el-button><span v-else class="muted">—</span></template>
                 </el-table-column>
               </el-table>
             </el-tab-pane>
@@ -209,7 +212,7 @@
             <!-- 留样送检 -->
             <el-tab-pane :label="`留样送检 (${current.submissions?.length || 0})`" name="submissions">
               <el-space wrap style="margin-bottom:10px">
-                <el-button type="primary" size="small" :icon="Promotion" @click="openSubmit">送检留样</el-button>
+                <el-button v-if="can('submitSample')" type="primary" size="small" :icon="Promotion" @click="openSubmit">送检留样</el-button>
                 <span class="muted" style="font-size:12px">送检结果（合格/不合格）自动回写留样并同步供应商食品安全档案；不合格可登记追责扣款</span>
               </el-space>
               <el-table :data="current.submissions || []" stripe size="small">
@@ -240,7 +243,8 @@
                 </el-table-column>
                 <el-table-column label="操作" width="100" fixed="right">
                   <template #default="{ row }">
-                    <el-button v-if="['pending', 'testing'].includes(row.result)" link type="primary" size="small" @click="openResult(row)">登记结果</el-button>
+                    <el-button v-if="can('labResult') && ['pending', 'testing'].includes(row.result)" link type="primary" size="small" @click="openResult(row)">登记结果</el-button>
+                    <span v-else class="muted">—</span>
                   </template>
                 </el-table-column>
               </el-table>
@@ -250,7 +254,8 @@
             <el-tab-pane :label="`同批食材去向 (${current.batchUsages?.length || 0})`" name="batch">
               <el-space style="margin-bottom:10px">
                 <el-input v-model="batchInput" placeholder="食材批次号，如 BATCH-20260914-A" style="width:260px" />
-                <el-button type="primary" size="small" @click="scanBatch">扫描同批食材用于哪些餐次</el-button>
+                <el-button v-if="can('batch')" type="primary" size="small" @click="scanBatch">扫描同批食材用于哪些餐次</el-button>
+                <span v-if="!can('batch')" class="muted" style="font-size:12px">同批食材处置由食堂/安全员/项目部执行</span>
               </el-space>
               <el-alert type="info" :closable="false" style="margin-bottom:10px"
                 title="留样送检期间，记录同批食材是否已用于其他餐次：已供餐取餐的餐次纳入供应商追责范围与回访名单" />
@@ -273,7 +278,7 @@
                 </el-table-column>
                 <el-table-column prop="riskNote" label="风险研判" min-width="200" show-overflow-tooltip />
                 <el-table-column label="操作" width="80" fixed="right">
-                  <template #default="{ row }"><el-button link type="primary" size="small" @click="openBatch(row)">处置</el-button></template>
+                  <template #default="{ row }"><el-button v-if="can('batch')" link type="primary" size="small" @click="openBatch(row)">处置</el-button><span v-else class="muted">—</span></template>
                 </el-table-column>
               </el-table>
             </el-tab-pane>
@@ -281,8 +286,9 @@
             <!-- 整改任务 -->
             <el-tab-pane :label="`安全整改 (${current.tasks?.length || 0})`" name="tasks">
               <el-space wrap style="margin-bottom:10px">
-                <el-button type="primary" size="small" :icon="MagicStick" @click="taskPackage">一键生成整改任务包</el-button>
-                <el-button size="small" :icon="Plus" @click="openTask">新增整改任务</el-button>
+                <el-button v-if="can('task')" type="primary" size="small" :icon="MagicStick" @click="taskPackage">一键生成整改任务包</el-button>
+                <el-button v-if="can('task')" size="small" :icon="Plus" @click="openTask">新增整改任务</el-button>
+                <span v-if="!can('task')" class="muted" style="font-size:12px">整改任务只读，处置需班组长/食堂/安全员/项目部权限</span>
               </el-space>
               <el-table :data="current.tasks || []" stripe size="small">
                 <el-table-column label="整改任务" min-width="220">
@@ -299,9 +305,10 @@
                 </el-table-column>
                 <el-table-column label="操作" width="150" fixed="right">
                   <template #default="{ row }">
-                    <el-button v-if="row.status === 'open'" link type="primary" size="small" @click="finishTask(row)">完成</el-button>
-                    <el-button v-if="row.status === 'done'" link type="success" size="small" @click="verifyTask(row)">验收</el-button>
-                    <el-button link size="small" @click="openTask(row)">编辑</el-button>
+                    <el-button v-if="can('task') && row.status === 'open'" link type="primary" size="small" @click="finishTask(row)">完成</el-button>
+                    <el-button v-if="can('taskVerify') && row.status === 'done'" link type="success" size="small" @click="verifyTask(row)">验收</el-button>
+                    <el-button v-if="can('task')" link size="small" @click="openTask(row)">编辑</el-button>
+                    <span v-if="!can('task')" class="muted">—</span>
                   </template>
                 </el-table-column>
               </el-table>
@@ -567,6 +574,21 @@ import { ref, reactive, computed, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Promotion, MagicStick } from '@element-plus/icons-vue';
 import api from '../api';
+import { useAuthStore } from '../store';
+
+const auth = useAuthStore();
+/** 服务端角色矩阵与后端 trace.roles.ts 保持一致（前端仅控制显隐，真正校验在服务端） */
+const CAN = {
+  create: ['FOREMAN', 'CANTEEN', 'SAFETY', 'PROJECT', 'ADMIN'],
+  supplier: ['PROJECT', 'ADMIN'],                 // 暂停/恢复供应商、结案
+  submitSample: ['CANTEEN', 'SAFETY', 'PROJECT', 'ADMIN'],
+  labResult: ['SAFETY', 'PROJECT', 'FINANCE', 'ADMIN'],
+  batch: ['CANTEEN', 'SAFETY', 'PROJECT', 'ADMIN'],
+  task: ['FOREMAN', 'CANTEEN', 'SAFETY', 'PROJECT', 'ADMIN'],
+  taskVerify: ['SAFETY', 'PROJECT', 'ADMIN'],
+};
+const can = (k) => CAN[k].includes(auth.role);
+const readOnly = computed(() => !can('create'));
 
 const SHIFTS = { breakfast: '早餐', lunch: '午餐', dinner: '晚餐', midnight: '夜宵' };
 const CATS = { seal: '封存食材', recall: '同批追回', disinfect: '环境消毒', supplier: '供应商整改', retrain: '人员培训', other: '其他' };
