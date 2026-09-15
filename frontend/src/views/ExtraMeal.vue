@@ -305,9 +305,12 @@ function openSafety(e) {
   safetyVisible.value = true;
 }
 async function submitSafety() {
+  const bad = safetyPoints.value.filter((p) => !(p.route || '').trim() || !(Number(p.stayMinutes) > 0));
+  if (bad.length) return ElMessage.warning('每个配送点都必须填写有效送餐路线和正数停留时间');
+  if (!(safetyNote.value || '').trim()) return ElMessage.warning('请填写安全确认意见');
   await api.post(`/extra-meals/${safetyId.value}/safety`, {
     safetyNote: safetyNote.value,
-    points: safetyPoints.value.map((p) => ({ id: p.id, route: p.route, stayMinutes: p.stayMinutes })),
+    points: safetyPoints.value.map((p) => ({ id: p.id, route: p.route.trim(), stayMinutes: Number(p.stayMinutes) })),
   });
   ElMessage.success('安全员已确认，可通知食堂备餐');
   safetyVisible.value = false; await load();
@@ -329,6 +332,7 @@ function openDepart(e, row) {
   departVisible.value = true;
 }
 async function submitDepart() {
+  if (!(departRow.sentCount > 0)) return ElMessage.warning('送达份数必须大于 0');
   await api.post(`/extra-meals/points/${departRow.id}/depart`, {
     route: departRow.route, stayMinutes: departRow.stayMinutes, sentCount: departRow.sentCount,
   });
@@ -361,9 +365,12 @@ function onPhoto(ev) {
   reader.readAsDataURL(file);
 }
 async function submitReceive() {
-  if (!receiveRow.receiver) return ElMessage.warning('请填写签收人');
+  if (!(receiveRow.receiver || '').trim()) return ElMessage.warning('请填写签收人');
+  if (!(Number(receiveRow.temp) > 0 && Number(receiveRow.temp) <= 100)) return ElMessage.warning('请填写有效餐食温度（0-100℃）');
+  if (!receiveRow.photo) return ElMessage.warning('请上传送达照片');
+  if (receiveRow.receivedCount == null || receiveRow.receivedCount < 0) return ElMessage.warning('请填写有效签收份数');
   await api.post(`/extra-meals/points/${receiveRow.id}/receive`, {
-    receiver: receiveRow.receiver, receiverPhone: receiveRow.receiverPhone, temp: receiveRow.temp,
+    receiver: receiveRow.receiver.trim(), receiverPhone: receiveRow.receiverPhone, temp: Number(receiveRow.temp),
     receivedCount: receiveRow.receivedCount, photo: receiveRow.photo,
   });
   ElMessage.success('签收完成'); receiveVisible.value = false; await load();

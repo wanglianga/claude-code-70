@@ -149,35 +149,63 @@ export class ExtraMealService {
     });
     const saved = await this.extras.save(e);
 
-    // 按申请配送点拆分份数（默认均分，余数补到第一个点），可随后在配送时调整
-    const pts = dto.points || [];
+    // 配送点份数：显式提供时校验总和不得超过确认份数；未提供则均分预分配（出发时才生效）
+    const pts = (dto.points || []).map((p) => ({ ...p, pointName: (p.pointName || '').trim() }));
     const n = pts.length;
+    const explicit = pts.filter((p) => p.sentCount !== undefined && p.sentCount !== null);
+    if (explicit.length) {
+      const sum = explicit.reduce((a, p) => a + Math.max(0, Math.floor(Number(p.sentCount) || 0)), 0);
+      if (sum > saved.confirmedCount) {
+        throw new BadRequestException(`配送点份数之和 ${sum} 超过加餐确认份数 ${saved.confirmedCount}`);
+      }
+    }
     const base = Math.floor(saved.confirmedCount / n);
     let rem = saved.confirmedCount - base * n;
     for (const p of pts) {
-      const sent = base + (rem > 0 ? 1 : 0); if (rem > 0) rem--;
+      const sent = p.sentCount !== undefined && p.sentCount !== null
+        ? Math.max(0, Math.floor(Number(p.sentCount)))
+        : base + (rem > 0 ? 1 : 0);
+      if (p.sentCount === undefined || p.sentCount === null) { if (rem > 0) rem--; }
       await this.points.save(this.points.create({
-        extraMealId: saved.id, teamId: p.teamId || null, pointName: p.pointName.trim(),
+        extraMealId: saved.id, teamId: p.teamId || null, pointName: p.pointName,
         route: p.route || '', stayMinutes: p.stayMinutes ?? null,
-        sentCount: p.sentCount ?? sent, status: 'pending',
+        sentCount: sent, status: 'pending',
       }));
     }
     return this.detail(saved.id);
   }
 
-  /** 安全员确认高风险配送点的路线与停留时间 */
+  /** 安全员确认高风险配送点的路线与停留时间（每个点都必须有有效路线和正数停留时间） */
   async safetyConfirm(id: number, dto: { safetyNote?: string; points?: Array<{ id: number; route: string; stayMinutes: number }> }, user: { sub: number }) {
     const e = await this.extras.findOne({ where: { id }, relations: ['points'] });
     if (!e) throw new NotFoundException('加餐单不存在');
-    for (const p of dto.points || []) {
-      const row = e.points.find((x) => x.id === p.id);
-      if (row) {
-        row.route = p.route || row.route;
-        row.stayMinutes = p.stayMinutes ?? row.stayMinutes;
-        await this.points.save(row);
+    if (!e.highRisk) throw new BadRequestException('该加餐不含高风险作业区，无需安全员确认');
+    if (!['pending_safety', 'ready'].includes(e.status)) throw new BadRequestException('当前状态不可进行安全确认');
+
+    const submitted = new Map<number, { route?: string; stayMinutes?: number }>(
+      (dto.points || []).map((p) => [p.id, p]),
+    );
+    // 每个配送点都必须有：非空有效路线 + 正数停留时间（分钟）
+    const errors: string[] = [];
+    for (const p of e.points) {
+      const s = submitted.get(p.id);
+      const route = (s?.route ?? p.route ?? '').toString().trim();
+      const stay = Number(s?.stayMinutes ?? p.stayMinutes ?? 0);
+      if (!route) errors.push(`「${p.pointName}」缺少有效送餐路线`);
+      if (!Number.isFinite(stay) || stay <= 0) errors.push(`「${p.pointName}」停留时间必须为正数（分钟）`);
+    }
+    if (errors.length) throw new BadRequestException({ message: '安全确认资料不完整', errors });
+
+    // 全部校验通过后才写库
+    for (const p of e.points) {
+      const s = submitted.get(p.id);
+      if (s) {
+        if (s.route !== undefined) p.route = s.route.trim();
+        if (s.stayMinutes !== undefined) p.stayMinutes = Math.floor(Number(s.stayMinutes));
+        await this.points.save(p);
       }
     }
-    e.safetyNote = dto.safetyNote || '安全员已确认送餐路线与停留时间（高风险作业区）';
+    e.safetyNote = (dto.safetyNote || '安全员已确认送餐路线与停留时间（高风险作业区）').trim();
     e.safetyUserId = user.sub;
     e.safetyConfirmedAt = new Date();
     e.status = 'ready';
@@ -199,39 +227,73 @@ export class ExtraMealService {
     return this.detail(id);
   }
 
-  /** 配送出发：登记路线/停留/份数，点位置 delivered */
+  /** 配送出发：登记路线/停留/份数；已出发各点送达份数之和不得超过加餐确认份数 */
   async departPoint(pointId: number, dto: { route?: string; stayMinutes?: number; sentCount?: number }) {
-    const p = await this.points.findOne({ where: { id: pointId } });
+    const p = await this.points.findOne({ where: { id: pointId }, relations: ['extraMeal'] });
     if (!p) throw new NotFoundException('配送点不存在');
+    const e = p.extraMeal;
+    if (!['confirmed', 'delivering'].includes(e.status)) {
+      throw new BadRequestException('食堂尚未确认备餐，暂不能出发配送');
+    }
+    const nextSent = dto.sentCount !== undefined ? Math.max(0, Math.floor(Number(dto.sentCount))) : p.sentCount;
+    if (!Number.isFinite(nextSent)) throw new BadRequestException('送达份数必须为非负整数');
+    if (nextSent <= 0) throw new BadRequestException('送达份数必须大于 0');
+    // 仅汇总已实际出发(delivered/received)的点，pending 点尚未送出不计；再加上本次
+    const others = await this.points.find({ where: { extraMealId: p.extraMealId } });
+    const committed = others
+      .filter((x) => x.id !== p.id && x.status !== 'pending')
+      .reduce((a, x) => a + (x.sentCount || 0), 0);
+    if (committed + nextSent > e.confirmedCount) {
+      throw new BadRequestException(`各配送点送达份数之和 ${committed + nextSent} 超过加餐确认份数 ${e.confirmedCount}，请调整`);
+    }
     if (dto.route !== undefined) p.route = dto.route;
     if (dto.stayMinutes !== undefined) p.stayMinutes = dto.stayMinutes;
-    if (dto.sentCount !== undefined) p.sentCount = Math.max(0, Math.floor(dto.sentCount));
+    p.sentCount = nextSent;
     p.status = 'delivered';
     await this.points.save(p);
-    const e = await this.extras.findOne({ where: { id: p.extraMealId } });
-    if (e && e.status === 'confirmed') { e.status = 'delivering'; await this.extras.save(e); }
+    if (e.status === 'confirmed') { e.status = 'delivering'; await this.extras.save(e); }
     return this.detail(p.extraMealId);
   }
 
   /**
-   * 施工点签收：签收人、温度、剩余数量、送达照片。
+   * 施工点签收：必须填写签收人、有效餐食温度、送达照片，缺任一返回 400 且状态不变。
    * remainingCount 为正即触发漏领预警，全部点签收后加餐单置 received。
    */
   async receivePoint(pointId: number, dto: { receiver: string; receiverPhone?: string; temp: number; receivedCount?: number; photo?: string }) {
     const p = await this.points.findOne({ where: { id: pointId }, relations: ['extraMeal'] });
     if (!p) throw new NotFoundException('配送点不存在');
-    p.receiver = dto.receiver; p.receiverPhone = dto.receiverPhone || '';
-    p.temp = dto.temp; p.photo = dto.photo || p.photo;
+
+    // 资料完整性校验（在任何写入之前）
+    const errors: string[] = [];
+    const receiver = (dto.receiver ?? '').toString().trim();
+    if (!receiver) errors.push('签收人不能为空');
+    const temp = Number(dto.temp);
+    if (dto.temp === undefined || dto.temp === null || !Number.isFinite(temp) || temp <= 0 || temp > 100) {
+      errors.push('餐食温度必须为有效数值（0-100℃）');
+    }
+    const photo = (dto.photo ?? '').toString().trim();
+    if (!photo) errors.push('送达照片不能为空');
+    if (p.status === 'pending') errors.push('该配送点尚未出发送达，不能签收');
+    if ((p.sentCount || 0) <= 0) errors.push('该配送点送达份数为0，不能签收');
+    let received = dto.receivedCount === undefined || dto.receivedCount === null ? p.sentCount : Math.floor(Number(dto.receivedCount));
+    if (!Number.isFinite(received) || received < 0 || received > p.sentCount) {
+      errors.push(`签收份数必须在 0-${p.sentCount} 之间`);
+    }
+    if (errors.length) throw new BadRequestException({ message: '签收资料不完整', errors });
+
+    // 校验通过后才写库（保证缺资料时状态不变）
+    p.receiver = receiver; p.receiverPhone = dto.receiverPhone || '';
+    p.temp = temp; p.photo = photo;
     p.arrivedAt = new Date();
-    p.receivedCount = Math.min(Math.max(0, Math.floor(dto.receivedCount ?? p.sentCount)), p.sentCount);
-    p.remainingCount = p.sentCount - p.receivedCount;
+    p.receivedCount = received;
+    p.remainingCount = p.sentCount - received;
     p.status = 'received';
     await this.points.save(p);
 
     const all = await this.points.find({ where: { extraMealId: p.extraMealId } });
     if (all.every((x) => x.status === 'received')) {
-      const e = await this.extras.findOne({ where: { id: p.extraMealId } });
-      e.status = 'received'; await this.extras.save(e);
+      const ex = await this.extras.findOne({ where: { id: p.extraMealId } });
+      ex.status = 'received'; await this.extras.save(ex);
     }
     return this.detail(p.extraMealId);
   }

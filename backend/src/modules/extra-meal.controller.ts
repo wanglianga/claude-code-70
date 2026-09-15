@@ -1,8 +1,9 @@
 import { Body, Controller, Get, Param, ParseIntPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { Roles, RolesGuard } from '../auth/roles.guard';
 import { ExtraMealService } from './extra-meal.service';
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('extra-meals')
 export class ExtraMealController {
   constructor(private svc: ExtraMealService) {}
@@ -23,13 +24,15 @@ export class ExtraMealController {
   @Post()
   create(@Body() dto: any, @Req() req) { return this.svc.create(dto, req.user); }
 
-  /** 安全员确认高风险路线与停留时间 */
+  /** 安全员确认高风险路线与停留时间——仅安全员/管理员 */
+  @Roles('SAFETY', 'ADMIN')
   @Post(':id/safety')
   safety(@Param('id', ParseIntPipe) id: number, @Body() dto: any, @Req() req) {
     return this.svc.safetyConfirm(id, dto, req.user);
   }
 
-  /** 食堂确认备餐（扣减食材余量） */
+  /** 食堂确认备餐（扣减食材余量）——仅食堂角色/管理员 */
+  @Roles('CANTEEN', 'ADMIN')
   @Post(':id/canteen-confirm')
   canteen(@Param('id', ParseIntPipe) id: number, @Req() req) {
     return this.svc.canteenConfirm(id, req.user);
