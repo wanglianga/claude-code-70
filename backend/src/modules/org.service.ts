@@ -7,6 +7,7 @@ import { Attendance } from '../entities/attendance.entity';
 import { ConstructionPlan } from '../entities/construction-plan.entity';
 import { Canteen } from '../entities/canteen.entity';
 import { Supplier } from '../entities/supplier.entity';
+import { SupplierFoodEvent } from '../entities/supplier-food-event.entity';
 
 @Injectable()
 export class OrgService {
@@ -17,6 +18,7 @@ export class OrgService {
     @InjectRepository(ConstructionPlan) private plans: Repository<ConstructionPlan>,
     @InjectRepository(Canteen) private canteens: Repository<Canteen>,
     @InjectRepository(Supplier) private suppliers: Repository<Supplier>,
+    @InjectRepository(SupplierFoodEvent) private supplierFoodEvents: Repository<SupplierFoodEvent>,
   ) {}
 
   // ---------- 班组 ----------
@@ -171,7 +173,11 @@ export class OrgService {
   }
 
   listSuppliers(canteenId?: number) {
-    return this.suppliers.find({ where: canteenId ? { canteenId } : {}, order: { id: 'ASC' } });
+    return this.suppliers.find({
+      where: canteenId ? { canteenId } : {},
+      relations: ['foodEvents'],
+      order: { id: 'ASC' },
+    });
   }
 
   createSupplier(dto: Partial<Supplier>) {

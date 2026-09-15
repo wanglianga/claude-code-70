@@ -52,11 +52,30 @@
             <el-button size="small" type="primary" :icon="Plus" style="margin-left:auto" @click="openSupplier">新增供应商</el-button>
           </div>
           <el-table :data="suppliers" stripe>
-            <el-table-column prop="name" label="供应商" min-width="160" />
-            <el-table-column prop="contact" label="联系人" width="100" />
-            <el-table-column prop="phone" label="电话" width="130" />
-            <el-table-column prop="licenseNo" label="经营许可证" width="140" />
-            <el-table-column label="累计扣款" width="110" align="center">
+            <el-table-column prop="name" label="供应商" min-width="170">
+              <template #default="{row}">
+                {{ row.name }}
+                <el-tooltip v-if="row.status==='suspended'" :content="row.suspendReason || '暂停供料中'" placement="top">
+                  <el-icon style="color:#c45656;vertical-align:-2px"><WarningFilled /></el-icon>
+                </el-tooltip>
+              </template>
+            </el-table-column>
+            <el-table-column prop="contact" label="联系人" width="90" />
+            <el-table-column prop="phone" label="电话" width="125" />
+            <el-table-column prop="licenseNo" label="经营许可证" width="130" />
+            <el-table-column label="供料状态" width="110" align="center">
+              <template #default="{row}">
+                <el-tag size="small" :type="row.status==='suspended' ? 'danger' : 'success'">
+                  {{ row.status==='suspended' ? '已暂停' : '正常' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="食安档案" width="90" align="center">
+              <template #default="{row}">
+                <el-button link type="primary" size="small" @click="openFoodEvents(row)">{{ row.foodEvents?.length || 0 }} 条</el-button>
+              </template>
+            </el-table-column>
+            <el-table-column label="累计扣款" width="100" align="center">
               <template #default="{row}"><span :class="row.deduction?'money-up':''">¥{{ row.deduction }}</span></template>
             </el-table-column>
           </el-table>
@@ -156,6 +175,26 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="foodVisible" :title="`${foodRow?.name || ''} · 食品安全档案`" width="640px">
+      <el-descriptions :column="2" border size="small" style="margin-bottom:12px">
+        <el-descriptions-item label="供料状态">
+          <el-tag size="small" :type="foodRow?.status==='suspended' ? 'danger' : 'success'">{{ foodRow?.status==='suspended' ? '已暂停供料' : '正常' }}</el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="累计追责扣款"><span :class="foodRow?.deduction ? 'money-up' : ''">¥{{ foodRow?.deduction || 0 }}</span></el-descriptions-item>
+      </el-descriptions>
+      <el-timeline v-if="foodRow?.foodEvents?.length">
+        <el-timeline-item v-for="fe in foodRow.foodEvents" :key="fe.id"
+          :timestamp="new Date(fe.createdAt).toLocaleString('zh-CN',{hour12:false})"
+          :type="['lab_fail','penalty','suspension'].includes(fe.type) ? 'danger' : fe.type==='resume' ? 'success' : 'primary'">
+          <el-tag size="small" :type="feType(fe.type).t">{{ feType(fe.type).l }}</el-tag>
+          <b style="margin-left:6px">{{ fe.title }}</b>
+          <div v-if="fe.traceCode" class="muted" style="font-size:12px">追溯编号：{{ fe.traceCode }}</div>
+          <div v-if="fe.content" class="muted" style="font-size:13px">{{ fe.content }}</div>
+        </el-timeline-item>
+      </el-timeline>
+      <el-empty v-else description="暂无食品安全档案记录" />
+    </el-dialog>
+
     <el-dialog v-model="teamVisible" title="新增班组" width="420px">
       <el-form :model="teamForm" label-width="100px">
         <el-form-item label="班组名称"><el-input v-model="teamForm.name" /></el-form-item>
@@ -189,6 +228,16 @@ const supplierVisible = ref(false);
 const supplierForm = reactive({ name: '', canteenId: null, contact: '', phone: '', licenseNo: '' });
 const teamVisible = ref(false);
 const teamForm = reactive({ name: '', trade: '', dormHeadcount: 20 });
+const foodVisible = ref(false);
+const foodRow = ref(null);
+function openFoodEvents(row) { foodRow.value = row; foodVisible.value = true; }
+function feType(t) {
+  return ({
+    lab_pass: { l: '检测合格', t: 'success' }, lab_fail: { l: '检测不合格', t: 'danger' },
+    suspension: { l: '暂停供料', t: 'danger' }, resume: { l: '恢复供料', t: 'success' },
+    penalty: { l: '追责扣款', t: 'danger' },
+  })[t] || { l: t, t: 'info' };
+}
 const reception = reactive({ date: new Date().toISOString().slice(0, 10), count: 8, price: 30, reason: '' });
 
 async function load() {

@@ -19,7 +19,7 @@ export class FoodSample {
   @Column({ nullable: true }) sampledBy: string;   // 留样人
   @Column({ type: 'timestamptz', nullable: true }) sampleAt: Date;
   @Column({ type: 'timestamptz', nullable: true }) expireAt: Date; // 48h 后
-  @Column({ default: 'retained' }) status: string; // retained 留样中 / passed 检测合格 / failed 检测异常 / disposed 已处置
+  @Column({ default: 'retained' }) status: string; // retained 留样中 / testing 送检中 / passed 检测合格 / failed 检测异常 / disposed 已处置
   @Column({ type: 'text', nullable: true }) labResult: string;
   @CreateDateColumn() createdAt: Date;
 }

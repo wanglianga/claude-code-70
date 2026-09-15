@@ -7,6 +7,7 @@ import { MealModule } from './modules/meal.module';
 import { IncidentModule } from './modules/incident.module';
 import { StatsModule } from './modules/stats.module';
 import { ExtraMealModule } from './modules/extra-meal.module';
+import { TraceModule } from './modules/trace.module';
 import { HealthController } from './health.controller';
 import { SeedService } from './seed/seed.service';
 import { User } from './entities/user.entity';
@@ -28,12 +29,22 @@ import { ExtraMealPickup } from './entities/extra-meal-pickup.entity';
 import { Incident } from './entities/incident.entity';
 import { IncidentAction } from './entities/incident-action.entity';
 import { MonthlyArchive } from './entities/monthly-archive.entity';
+import { TraceEvent } from './entities/trace-event.entity';
+import { DiscomfortReport } from './entities/discomfort-report.entity';
+import { ContactPerson } from './entities/contact-person.entity';
+import { SampleSubmission } from './entities/sample-submission.entity';
+import { BatchUsage } from './entities/batch-usage.entity';
+import { RectificationTask } from './entities/rectification-task.entity';
+import { TraceAction } from './entities/trace-action.entity';
+import { SupplierFoodEvent } from './entities/supplier-food-event.entity';
 
 const entities = [
   User, Team, Worker, Attendance, ConstructionPlan, Canteen, Supplier, MealSession, MealOrder,
   MealPreparation, FoodSample, MealDelivery, MealPickup,
   ExtraMeal, ExtraMealPoint, ExtraMealPickup,
   Incident, IncidentAction, MonthlyArchive,
+  TraceEvent, DiscomfortReport, ContactPerson, SampleSubmission, BatchUsage,
+  RectificationTask, TraceAction, SupplierFoodEvent,
 ];
 
 @Module({
@@ -52,7 +63,7 @@ const entities = [
       retryDelay: 3000,
     }),
     TypeOrmModule.forFeature(entities),
-    AuthModule, OrgModule, MealModule, IncidentModule, StatsModule, ExtraMealModule,
+    AuthModule, OrgModule, MealModule, IncidentModule, StatsModule, ExtraMealModule, TraceModule,
   ],
   controllers: [HealthController],
   providers: [SeedService],

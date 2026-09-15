@@ -13,6 +13,7 @@ const routes = [
       { path: 'extra', name: '夜间加餐', component: () => import('./views/ExtraMeal.vue') },
       { path: 'pickup', name: '取餐终端', component: () => import('./views/Pickup.vue') },
       { path: 'incidents', name: '异常协同', component: () => import('./views/Incidents.vue') },
+      { path: 'trace', name: '食品不适追溯', component: () => import('./views/Trace.vue') },
       { path: 'archive', name: '结算与后勤档案', component: () => import('./views/Archive.vue') },
       { path: 'workers', name: '工人实名考勤', component: () => import('./views/Workers.vue') },
       { path: 'basic', name: '基础档案', component: () => import('./views/Basic.vue') },

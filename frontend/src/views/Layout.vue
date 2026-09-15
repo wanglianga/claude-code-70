@@ -13,6 +13,7 @@
         <el-menu-item index="/extra"><el-icon><MoonNight /></el-icon><span>夜间加班加餐</span></el-menu-item>
         <el-menu-item index="/pickup"><el-icon><Avatar /></el-icon><span>取餐终端</span></el-menu-item>
         <el-menu-item index="/incidents"><el-icon><Warning /></el-icon><span>异常协同</span></el-menu-item>
+        <el-menu-item index="/trace"><el-icon><FirstAidKit /></el-icon><span>食品不适追溯</span></el-menu-item>
         <el-menu-item index="/archive"><el-icon><Document /></el-icon><span>结算/后勤档案</span></el-menu-item>
         <el-menu-item index="/workers"><el-icon><Postcard /></el-icon><span>工人实名考勤</span></el-menu-item>
         <el-menu-item index="/basic"><el-icon><OfficeBuilding /></el-icon><span>基础档案</span></el-menu-item>

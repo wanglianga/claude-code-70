@@ -19,7 +19,11 @@ import { ExtraMeal } from '../entities/extra-meal.entity';
 import { ExtraMealPoint } from '../entities/extra-meal-point.entity';
 import { ExtraMealPickup } from '../entities/extra-meal-pickup.entity';
 import { Incident } from '../entities/incident.entity';
+import { ContactPerson } from '../entities/contact-person.entity';
+import { RectificationTask } from '../entities/rectification-task.entity';
+import { SupplierFoodEvent } from '../entities/supplier-food-event.entity';
 import { allocate, synthesizeOne } from '../modules/allocation';
+import { TraceService } from '../modules/trace.service';
 
 @Injectable()
 export class SeedService implements OnModuleInit {
@@ -42,6 +46,10 @@ export class SeedService implements OnModuleInit {
     @InjectRepository(ExtraMealPoint) private extraPoints: Repository<ExtraMealPoint>,
     @InjectRepository(ExtraMealPickup) private extraPickups: Repository<ExtraMealPickup>,
     @InjectRepository(Incident) private incidents: Repository<Incident>,
+    @InjectRepository(ContactPerson) private traceContacts: Repository<ContactPerson>,
+    @InjectRepository(RectificationTask) private rectTasks: Repository<RectificationTask>,
+    @InjectRepository(SupplierFoodEvent) private supplierFoodEvents: Repository<SupplierFoodEvent>,
+    private trace: TraceService,
   ) {}
 
   async onModuleInit() {
@@ -79,7 +87,7 @@ export class SeedService implements OnModuleInit {
       ingredientStock: 60,
     }));
     const sup1 = await this.suppliers.save(this.suppliers.create({
-      name: '绿源蔬菜配送', contact: '刘老板', phone: '13911110001', licenseNo: 'SC2025001', canteenId: canteen.id,
+      name: '绿源农副产品配送', contact: '刘老板', phone: '13911110001', licenseNo: 'SC2025001', canteenId: canteen.id,
     }));
     const sup2 = await this.suppliers.save(this.suppliers.create({
       name: '正大红肉联', contact: '马老板', phone: '13911110002', licenseNo: 'SC2025002', deduction: 300, canteenId: canteen.id,
@@ -246,6 +254,26 @@ export class SeedService implements OnModuleInit {
       sampleAt: oldNow, expireAt: new Date(oldNow.getTime() + 48 * 3600e3),
       status: 'passed', labResult: '检测合格',
     }));
+    // 供应商历史食安档案：昨日留样不合格已扣款（与异常协同旧单对应）
+    await this.supplierFoodEvents.save(this.supplierFoodEvents.create({
+      supplierId: sup2.id, type: 'lab_fail', title: '凉拌黄瓜 留样检测不合格（历史）',
+      content: '菌落总数超标，封存同批次食材', traceCode: '历史工单', sampleBoxNo: 'BOX-凉拌',
+      dishName: '凉拌黄瓜',
+    }));
+    await this.supplierFoodEvents.save(this.supplierFoodEvents.create({
+      supplierId: sup2.id, type: 'penalty', title: '追责扣款 ¥300（历史）',
+      content: '留样检测不合格按协议扣款', traceCode: '历史工单', amount: 300,
+    }));
+
+    // ---- 晚餐备餐：与午餐同批食材 BATCH-20260914-A（同批食材跨餐次复用，供追溯扫描） ----
+    const dinnerPrep = await this.preps.save(this.preps.create({
+      sessionId: dinner.id,
+      menu: '土豆烧鸡块（同批鸡腿肉）、清炒时蔬、紫菜蛋汤、米饭',
+      ingredientBatch: 'BATCH-20260914-A', supplierId: sup1.id, chef: '周师傅',
+      coreTemp: 74.0, ambientTemp: 30.5, cookTime: '16:30', serveTime: '17:30',
+      preparedCount: 24, shortageCount: 0, lossCount: 0,
+      note: '沿用午餐同批配送食材',
+    }));
 
     // ---- 夜宵配送：塔吊作业区 / 夜间分散点，保温 + 安全确认 ----
     await this.deliveries.save(this.deliveries.create({
@@ -366,6 +394,136 @@ export class SeedService implements OnModuleInit {
       status: 'resolved', resolution: '启用保温箱+冰袋双控，配送路线避开暴晒区，留样温度每 2 小时记录一次。',
     }));
 
-    this.logger.log(`种子完成：${today} 餐次3个、订餐7条、取餐${totalPicks}条、留样7份、异常5条`);
+    // ---- 食品不适追溯（多名工人腹痛/呕吐，完整处置链演示） ----
+    const actorProject = { sub: projectUser.id, role: 'PROJECT', name: '赵项目部' };
+    const actorForeman = { sub: foreman1.id, role: 'FOREMAN', name: '王强' };
+    const actorSafety = { sub: safetyUser.id, role: 'SAFETY', name: '孙安全员' };
+
+    // 今日午餐后多名工人腹痛呕吐 → 项目部建档追溯（关联午餐餐次，自动带出供应商与食材批次）
+    const lunchTime = new Date(`${today}T11:40:00`);
+    const traceEv = await this.trace.create({
+      title: '午餐后多名工人腹痛呕吐，启动食品不适追溯',
+      description: '午饭后约 1 小时，钢筋一班、混凝土二班共 4 名工人先后出现腹痛、呕吐、腹泻，其中 1 人送镇卫生院观察。项目部立即启动追溯：暂停涉事供应商、同餐次人员回访停餐观察、留样送检、同批食材去向排查并生成整改任务。',
+      severity: 'high',
+      sessionId: lunch.id,
+      mealTime: lunchTime.toISOString(),
+      dishes: '红烧鸡腿,番茄蛋汤',
+      sampleBoxNos: 'BOX-红烧,BOX-番茄',
+    }, actorSafety);
+
+    // 逐人收集：取餐时间 / 菜品 / 班组 / 留样编号 / 就医记录
+    const sickWorkers = [
+      { w: savedWorkers[0], symptoms: ['abdominal_pain', 'vomiting'], med: 'outpatient', hospital: '镇卫生院', diagnosis: '急性胃肠炎（疑似食物中毒）', dishes: '红烧鸡腿、番茄蛋汤、米饭', box: 'BOX-红烧' },
+      { w: savedWorkers[1], symptoms: ['abdominal_pain', 'vomiting', 'fever'], med: 'observation', hospital: '工地医务室', diagnosis: '腹痛呕吐，留观补液', dishes: '红烧鸡腿、青椒土豆丝、米饭', box: 'BOX-红烧' },
+      { w: savedWorkers[2], symptoms: ['abdominal_pain', 'nausea'], med: 'none', hospital: '', diagnosis: '', dishes: '红烧鸡腿、米饭', box: 'BOX-红烧' },
+      { w: savedWorkers[10], symptoms: ['abdominal_pain', 'diarrhea'], med: 'inpatient', hospital: '区人民医院', diagnosis: '感染性腹泻，住院治疗', dishes: '红烧鸡腿、番茄蛋汤、米饭', box: 'BOX-红烧' },
+    ];
+    for (const s of sickWorkers) {
+      await this.trace.addReport(traceEv.id, {
+        workerId: s.w.id,
+        symptoms: s.symptoms,
+        onsetAt: new Date(lunchTime.getTime() + 70 * 60e3).toISOString(),
+        pickupAt: lunchTime.toISOString(),
+        dishes: s.dishes,
+        sampleBoxNo: s.box,
+        medicalStatus: s.med,
+        hospital: s.hospital,
+        diagnosis: s.diagnosis,
+        medicalNote: s.med === 'inpatient' ? '体温38.1℃，已补液并通知家属，医保/工伤对接中' : '',
+      }, actorForeman);
+    }
+
+    // 从取餐流水生成同餐次人员名单 → 通知 + 48 小时停餐观察
+    await this.trace.buildContacts(traceEv.id, actorProject);
+    await this.trace.notifyContacts(traceEv.id, {
+      channel: '电话+班组长转达', suspendMeal: true, observeHours: 48,
+      content: '请留意腹痛呕吐症状，48小时内暂停食堂供餐并观察',
+    }, actorProject);
+    // 回访：症状较轻者恢复供餐
+    const zhangContact = await this.traceContacts.findOne({
+      where: { traceEventId: traceEv.id, workerId: savedWorkers[2].id },
+    });
+    if (zhangContact) {
+      await this.trace.followUp(traceEv.id, zhangContact.id, {
+        observeStatus: 'resumed', resume: true, followUpResult: '次日回访症状消失，已恢复正常上班与供餐',
+      }, actorForeman);
+    }
+
+    // 项目部暂停涉事食材供应商
+    await this.trace.suspendSupplier(traceEv.id, {
+      supplierId: sup1.id,
+      reason: '午餐后多名工人腹痛呕吐疑似食材污染，调查送检期间暂停供料',
+    }, actorProject);
+
+    // 留样送检：红烧鸡腿 + 番茄蛋汤
+    const lunchSamples = await this.samples.find({ where: { preparationId: prep.id } });
+    const meatSample = lunchSamples.find((s) => s.dishName === '红烧鸡腿');
+    const soupSample = lunchSamples.find((s) => s.dishName === '番茄蛋汤');
+    await this.trace.submitSample(traceEv.id, {
+      sampleId: meatSample.id, labName: '市食品检验检测中心', labContact: '0571-88001234',
+      testItems: ['菌落总数', '大肠菌群', '沙门氏菌', '金黄色葡萄球菌'],
+    }, actorProject);
+    await this.trace.submitSample(traceEv.id, {
+      sampleId: soupSample.id, labName: '市食品检验检测中心', labContact: '0571-88001234',
+      testItems: ['菌落总数', '大肠菌群'],
+    }, actorSafety);
+    const subs = (await this.trace.detail(traceEv.id)).submissions;
+    const meatSub = subs.find((s) => s.dishName === '红烧鸡腿');
+    const soupSub = subs.find((s) => s.dishName === '番茄蛋汤');
+    // 检测结果：鸡腿不合格（同步供应商档案+追责扣款2000），蛋汤合格
+    await this.trace.recordLabResult(traceEv.id, meatSub.id, {
+      result: 'failed', penaltyAmount: 2000,
+      labReport: '菌落总数 8.2×10⁵ CFU/g（限值≤10⁵），检出沙门氏菌，判定不合格',
+    }, actorProject);
+    await this.trace.recordLabResult(traceEv.id, soupSub.id, {
+      result: 'passed', labReport: '菌落总数、大肠菌群均符合 GB 31659 限量要求',
+    }, actorSafety);
+
+    // 同批食材去向：扫描 BATCH-20260914-A 是否用于其他餐次（晚餐同批，纳入追责范围）
+    await this.trace.scanBatch(traceEv.id, { ingredientBatch: 'BATCH-20260914-A' }, actorSafety);
+    const usages = (await this.trace.detail(traceEv.id)).batchUsages;
+    const dinnerUsage = usages.find((u) => u.sessionId === dinner.id);
+    if (dinnerUsage) {
+      await this.trace.setBatchUsage(traceEv.id, dinnerUsage.id, {
+        status: 'sealed', riskNote: '晚餐已使用同批鸡腿肉，剩余库存已封存；本餐次取餐人员纳入重点回访，暂未出现新发症状',
+      }, actorSafety);
+    }
+
+    // 生成安全整改任务包并完成/验收部分任务（保留进行中状态便于演示）
+    await this.trace.generateTaskPackage(traceEv.id, actorProject);
+    const taskRows = await this.rectTasks.find({ where: { traceEventId: traceEv.id } });
+    const sealTask = taskRows.find((t) => t.category === 'seal');
+    const disinfectTask = taskRows.find((t) => t.category === 'disinfect');
+    if (sealTask) {
+      await this.trace.updateTask(traceEv.id, sealTask.id, { status: 'done', result: '同批鸡腿肉及半成品共 32kg 已上锁封存，拍照留档' }, { sub: canteenUser.id, role: 'CANTEEN', name: '周师傅' });
+      await this.trace.updateTask(traceEv.id, sealTask.id, { status: 'verified' }, actorSafety);
+    }
+    if (disinfectTask) {
+      await this.trace.updateTask(traceEv.id, disinfectTask.id, { status: 'done', result: '操作间、刀具砧板、留样冰箱已完成含氯消毒并记录' }, { sub: canteenUser.id, role: 'CANTEEN', name: '周师傅' });
+    }
+
+    // ---- 历史已结案追溯事件（昨日凉菜，已康复结案；供应商档案留痕） ----
+    const yesterday = new Date(Date.now() - 26 * 3600e3);
+    const oldTrace = await this.trace.create({
+      title: '昨日凉拌黄瓜腹泻追溯（已结案）',
+      description: '2 名工人食用昨日午餐凉拌黄瓜后腹泻，留样送检菌落总数超标，供应商已扣款并整改。',
+      severity: 'medium',
+      supplierId: sup2.id,
+      mealTime: yesterday.toISOString(),
+      dishes: '凉拌黄瓜',
+      sampleBoxNos: 'BOX-凉拌',
+    }, actorSafety);
+    await this.trace.addReport(oldTrace.id, {
+      workerId: savedWorkers[7].id, symptoms: ['diarrhea', 'abdominal_pain'],
+      pickupAt: yesterday.toISOString(), dishes: '凉拌黄瓜、回锅肉', sampleBoxNo: 'BOX-凉拌',
+      medicalStatus: 'outpatient', hospital: '镇卫生院', diagnosis: '急性肠炎',
+      status: 'recovered',
+    }, actorForeman);
+    await this.trace.close(oldTrace.id, {
+      conclusion: '留样检测菌落总数超标，销毁同批次食材，供应商正大红肉联扣款 300 元并整改；2 名工人均已康复，事件结案。',
+      responsibleParty: '正大红肉联',
+    }, actorProject);
+
+    this.logger.log(`种子完成：${today} 餐次3个、订餐7条、取餐${totalPicks}条、留样7份、异常5条、食品不适追溯2起（在查1起/已结案1起）`);
   }
 }
